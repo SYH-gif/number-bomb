@@ -45,10 +45,12 @@ public static class SnakeCoins
 {
     /// <summary>每吃一个食物 +1 分</summary>
     public const int FoodPoints = 1;
-    /// <summary>每吃一个食物，共享金币池 +2，结束全桌平分</summary>
-    public const int PerFood = 2;
-    /// <summary>撞在你身上的蛇死了，你 +3 分</summary>
-    public const int KillBonus = 3;
-    /// <summary>活到最后 +10 分</summary>
-    public const int WinBonus = 10;
+    /// <summary>每吃一个食物，共享金币池 +1，结束全桌平分</summary>
+    public const int PerFood = 1;
+    /// <summary>撞在你身上的蛇死了，你 +1 分</summary>
+    public const int KillBonus = 1;
+    /// <summary>活到最后 +5 分</summary>
+    public const int WinBonus = 5;
+    /// <summary>死了倒扣 3 分（撞墙、撞肚子、撞自己都算）</summary>
+    public const int DiedPenalty = -3;
 }

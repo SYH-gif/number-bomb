@@ -1972,3 +1972,56 @@ body.device-phone .app { padding-bottom: calc(72px + env(safe-area-inset-bottom)
   .draw-word { font-size: 14px; }
   .snake-pool { font-size: 13px; padding: 4px 10px; }
 }
+
+/* =========================================================
+   1.9.1 打磨：弹窗间距松一点、手机端排版顺眼
+   ========================================================= */
+
+/* 弹窗内部：留白拉开，不再挤成一坨 */
+.modal-card .modal-title { margin-bottom: 6px; }
+.modal-card .q { margin: 16px 0 8px; }
+.modal-card .hint { margin-top: 10px; line-height: 1.7; }
+.modal-card .modal-actions { margin-top: 16px; gap: 10px; }
+
+/* 管理/开发者面板：区块之间呼吸感 */
+#modalAdmin .tabs { margin: 2px 0 14px; }
+#modalAdmin .hint { margin-top: 12px; }
+#modalAdmin .field { margin-bottom: 12px; }
+#modalAdmin .block-title { margin: 18px 0 10px; }
+#modalAdmin .role-found { margin-top: 12px; }
+.danger-box + .danger-box { margin-top: 12px; }
+.list { gap: 10px; }
+
+/* 游戏区：面板之间松一点 */
+.draw-panel, .snake-panel { gap: 12px; }
+.draw-head { flex-wrap: wrap; row-gap: 6px; }
+.snake-head { flex-wrap: wrap; row-gap: 6px; }
+
+/* 手机端整体 */
+@media (max-width: 640px) {
+  .modal-card { padding: 22px 16px 18px; }
+  .modal-title { font-size: 19px; }
+  .modal-head { margin-bottom: 10px; }
+  .q { margin: 14px 0 8px; }
+  .q, .field-label { font-size: 14px; }
+
+  /* 玩家条：紧凑但不挤 */
+  .player { width: 68px; padding: 8px 4px; }
+  .player .avatar-lg { width: 34px; height: 34px; }
+  .ppoints { font-size: 11px; }
+
+  /* 画猜 / 蛇面板 */
+  .draw-panel, .snake-panel { gap: 10px; }
+  .draw-tools { row-gap: 8px; }
+  .draw-guess-row { position: sticky; bottom: calc(10px + env(safe-area-inset-bottom)); z-index: 10; }
+  .draw-guess-row .input { background: rgba(24, 29, 38, .96); backdrop-filter: blur(8px); }
+  .game-foot { margin-top: 14px; }
+}
+
+@media (max-width: 480px) {
+  /* 画布改成 1:1，画画区域更大更好落笔 */
+  #drawCanvas { aspect-ratio: 1 / 1; }
+  .player { width: 62px; }
+  .snake-pool { font-size: 12px; }
+  .turn-line { font-size: 13px; }
+}

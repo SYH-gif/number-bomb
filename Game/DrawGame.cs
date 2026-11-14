@@ -46,12 +46,14 @@ public sealed class DrawState
 /// <summary>你画我猜的得分与金币规则</summary>
 public static class DrawScores
 {
-    /// <summary>猜对一次 +10 分</summary>
-    public const int Correct = 10;
-    /// <summary>画手每有一位猜对 +8 分</summary>
-    public const int PerGuesser = 8;
+    /// <summary>猜对一次 +5 分</summary>
+    public const int Correct = 5;
+    /// <summary>画手每有一位猜对 +4 分</summary>
+    public const int PerGuesser = 4;
     /// <summary>猜对的人（和对应的画手）各得多少金币</summary>
-    public const int CoinsPerCorrect = 10;
+    public const int CoinsPerCorrect = 5;
+    /// <summary>猜错一次 -2 分（别瞎喊，会掉分）</summary>
+    public const int WrongPenalty = -2;
 }
 
 /// <summary>画猜词库：都是生活中常见的，画得出来也猜得出来。</summary>

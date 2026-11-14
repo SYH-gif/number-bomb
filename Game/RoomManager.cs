@@ -335,7 +335,7 @@ public sealed class RoomManager
         var draw = room.Draw!;
         var drawer = room.Players.FirstOrDefault(p => p.UserId == draw.DrawerPid);
 
-        // 画手每有一个猜对的 +8 分 +10 金币；猜对的人各 +10 分 +10 金币
+        // 画手每有一个猜对的 +4 分 +5 金币；猜对的人各 +5 分 +5 金币（猜错 -2）
         var correctCount = draw.GuessedIds.Count;
         if (drawer is not null && correctCount > 0 && !drawer.IsBot)
             draw.AddScore(drawer.UserId, DrawScores.PerGuesser * correctCount, DrawScores.CoinsPerCorrect * correctCount);
@@ -559,6 +559,11 @@ public sealed class RoomManager
                 var guessers = room.Players.Count(p => !p.IsBot && p.UserId != drawer.UserId);
                 if (draw.GuessedIds.Count >= guessers) turnEnded = true;
             }
+            else
+            {
+                // 猜错扣 2 分，别瞎喊
+                draw.AddScore(userId, DrawScores.WrongPenalty, 0);
+            }
         }
 
         if (correct)
@@ -660,7 +665,7 @@ public sealed class RoomManager
         {
             var isLoser = p.UserId == loser.UserId;
             // 戴了免死金牌就不扣分，牌子这一把用完就没了
-            var delta = isLoser ? (p.Shielded ? 0 : -5) : 10;
+            var delta = isLoser ? (p.Shielded ? 0 : -5) : 5;
             if (star is not null && p.UserId == star.UserId && p.GoodGuesses > 0) delta += 5;
 
             // 踩雷的这位扣金币（1~100 随机），赢的人照旧 +30
@@ -1491,6 +1496,7 @@ public sealed class RoomManager
             var pts = sp?.Score ?? 0;
             if (winnerId is not null && p.UserId == winnerId) pts += SnakeCoins.WinBonus;
             pts += sp?.Kills * SnakeCoins.KillBonus ?? 0;
+            if (sp is { Alive: false }) pts += SnakeCoins.DiedPenalty; // 死了倒扣
             var coins = p.IsBot ? 0 : share;
             p.Points = Math.Max(0, p.Points + pts);
             if (!p.IsBot) p.Coins = Math.Max(0, p.Coins + coins);
