@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0e1014" />
+  <meta name="color-scheme" content="dark" />
+  <!-- 版本号内联在页面里：进站就不用为了比版本多跑一次请求 -->
+  <meta name="nb-version" content="1.8.2" />
+  <title>数字炸弹 · 悄悄猜</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💣</text></svg>" />
+  <link rel="stylesheet" href="/css/style.css?v=1.8.2" />
+</head>
+<body>
+
+<div class="glow glow-a"></div>
+<div class="glow glow-b"></div>
+
+<!-- 版本更新提示 -->
+<div class="version-banner" id="versionBanner" hidden>
+  <span id="versionText">更新到 1.0.1 啦</span>
+  <button class="version-btn" id="versionRefresh">刷新一下</button>
+  <button class="version-later" id="versionLater" type="button" title="稍后再说">✕</button>
+</div>
+
+<!-- 顶部：头像 + 积分 -->
+<header class="topbar" id="topbar" hidden>
+  <button class="me-chip" id="meChip" title="换个头像">
+    <span class="avatar avatar-md" id="meAvatar">🐱</span>
+    <span class="me-meta">
+      <span class="me-name" id="meName">朋友</span>
+      <span class="me-tip">我的资料</span>
+    </span>
+  </button>
+
+  <div class="top-right">
+    <span class="coins-pill" id="coinsPill" title="金币：赢一局 +30，踩雷 -1~100，用来买道具">
+      <span class="coins-emoji">🪙</span><span class="coins-num" id="coinsNum">0</span>
+    </span>
+    <button class="icon-btn" id="btnChat" type="button" title="对话">
+      <span class="icon-emoji">💬</span>
+      <span class="badge" id="chatBadge" hidden>0</span>
+    </button>
+    <button class="icon-btn" id="btnFriends" type="button" title="好友">
+      <span class="icon-emoji">👥</span>
+      <span class="badge" id="friendBadge" hidden>0</span>
+    </button>
+    <button class="icon-btn" id="btnMail" type="button" title="信箱">
+      <span class="icon-emoji">✉️</span>
+      <span class="badge" id="mailBadge" hidden>0</span>
+    </button>
+    <div class="points" id="pointsPill">
+      <span class="points-spark">✦</span>
+      <span class="points-num" id="pointsNum">100</span>
+      <span class="points-delta" id="pointsDelta"></span>
+    </div>
+  </div>
+</header>
+
+<main class="app">
+
+  <!-- 1. 门禁 -->
+  <!-- 1. 门禁（默认关着，只有 appsettings.json 里填了 AccessPassword 才会露面） -->
+  <section class="view" id="view-gate" hidden>
+    <div class="card gate-card">
+      <div id="gateStepDevice">
+        <h1 class="gate-title">先问一句</h1>
+        <p class="gate-q">你现在是用电脑还是手机呀？</p>
+        <div class="device-row">
+          <button class="device-btn" data-device="pc">
+            <span class="device-emoji">🖥️</span><span class="device-text">电脑</span>
+          </button>
+          <button class="device-btn" data-device="phone">
+            <span class="device-emoji">📱</span><span class="device-text">手机</span>
+          </button>
+        </div>
+        <p class="hint">就这一次，选完就记住了</p>
+      </div>
+
+      <div id="gateStepPassword" hidden>
+        <h1 class="gate-title">悄悄话时间</h1>
+        <p class="gate-q">访问密码是？</p>
+        <form class="row" id="gateForm" autocomplete="off">
+          <input class="input" id="gatePassword" type="password" placeholder="我私聊发你的那个" />
+          <button class="btn btn-primary" id="gateSubmit" type="submit">进去</button>
+        </form>
+        <p class="hint" id="gateHint">没有它进不来。别截图发群里。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 注册 / 登录 -->
+  <section class="view" id="view-auth" hidden>
+    <div class="card auth-card">
+      <div class="brand">
+        <div class="brand-mark">💣</div>
+        <div>
+          <h1 class="brand-title">数字炸弹</h1>
+          <p class="brand-sub">悄悄猜，别踩雷</p>
+        </div>
+      </div>
+
+      <div class="tabs" id="authTabs">
+        <button class="tab is-active" data-tab="register" type="button">新来的</button>
+        <button class="tab" data-tab="login" type="button">老朋友</button>
+      </div>
+
+      <form class="stack" id="authForm">
+        <label class="field">
+          <span class="field-label">你的名字</span>
+          <input class="input" id="authName" maxlength="12" placeholder="两到十二个字，随便起" autocomplete="username" />
+        </label>
+        <label class="field">
+          <span class="field-label">密码</span>
+          <input class="input" id="authPass" type="password" maxlength="32" placeholder="至少四位，别太好猜" autocomplete="current-password" />
+        </label>
+
+        <div class="avatar-pick" id="avatarPick">
+          <div class="field-label">挑个头像吧</div>
+          <div class="avatar-grid" id="avatarGrid"></div>
+          <div class="avatar-pick-actions">
+            <button class="btn btn-ghost btn-draw" id="btnDrawAvatar" type="button">✍️ 自己画一个</button>
+            <button class="btn btn-ghost btn-draw" id="btnAlbumAuth" type="button">🖼 从相册选</button>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-block" id="authSubmit" type="submit">进来玩</button>
+        <p class="hint" id="authHint">先给你 100 分当本钱，输了也不心疼</p>
+      </form>
+    </div>
+  </section>
+
+  <!-- 3. 大厅 -->
+  <section class="view" id="view-lobby" hidden>
+    <div class="lobby">
+      <div class="hero">
+        <h1 class="hero-title">数字炸弹<span class="dot">.</span></h1>
+        <p class="hero-sub">有人偷偷藏了个数字，连他自己都不记得藏在哪儿。轮流猜，猜中就「砰」一下。</p>
+      </div>
+
+      <div class="lobby-grid">
+        <button class="big-card" id="btnCreate">
+          <span class="big-emoji">🎲</span>
+          <span class="big-title">开一间</span>
+          <span class="big-sub">定几个人、数字藏多大，房号扔群里</span>
+        </button>
+        <button class="big-card" id="btnJoin">
+          <span class="big-emoji">🚪</span>
+          <span class="big-title">进别人的屋</span>
+          <span class="big-sub">朋友给你一串四位数字吧</span>
+        </button>
+      </div>
+
+      <div class="lobby-tools">
+        <button class="tool-btn" id="btnShopLobby" type="button">
+          <span class="tool-emoji">🛍️</span><span class="tool-name">道具商店</span>
+        </button>
+        <button class="tool-btn" id="btnFriendsLobby" type="button">
+          <span class="tool-emoji">👥</span><span class="tool-name">好友</span>
+          <em class="tool-meta" id="friendsMeta">—</em>
+        </button>
+        <button class="tool-btn" id="btnMailLobby" type="button">
+          <span class="tool-emoji">✉️</span><span class="tool-name">信箱</span>
+          <em class="tool-meta" id="mailMeta">—</em>
+        </button>
+        <button class="tool-btn" id="btnChatLobby" type="button">
+          <span class="tool-emoji">💬</span><span class="tool-name">对话</span>
+          <em class="tool-meta" id="chatMeta">—</em>
+        </button>
+        <button class="tool-btn" id="btnAdminLobby" type="button" hidden>
+          <span class="tool-emoji">🛡️</span><span class="tool-name">管理</span>
+        </button>
+      </div>
+
+      <!-- 大厅公屏：不用加好友也能说两句，全世界都看得见 -->
+      <section class="lobby-chat">
+        <div class="lobby-chat-head">
+          <h2>大厅公屏</h2>
+          <span class="hint" id="lobbyChatHint">路过都能说一句，别刷屏</span>
+        </div>
+        <div class="chat-stream lobby-stream" id="lobbyStream"></div>
+        <form class="chat-compose" id="lobbyForm" autocomplete="off">
+          <input class="input" id="lobbyInput" maxlength="300" placeholder="说点什么…" />
+          <button class="btn btn-primary" type="submit" id="lobbySend">发送</button>
+        </form>
+      </section>
+
+      <div class="rules">
+        <h2>怎么玩</h2>
+        <ol>
+          <li>范围你们自己定，1 到 100 就挺合适。定得越大，越熬人。</li>
+          <li>轮流猜。每次告诉你「大了」还是「小了」，能猜的地方就窄一圈。</li>
+          <li>猜中的那位扣 5 分，其余人各加 10。范围缩得最狠的，再奖 5 分。</li>
+          <li>一分钟凑不齐人，会塞个机器人进来。它是真不知道答案。</li>
+        </ol>
+        <p class="rules-tail">差不多就这些，剩下的靠手气。</p>
+      </div>
+
+      <button class="link-quiet" id="btnLogout" type="button">换个账号</button>
+    </div>
+  </section>
+
+  <!-- 4. 房间等候 -->
+  <section class="view" id="view-room" hidden>
+    <div class="room">
+      <div class="room-head">
+        <div>
+          <div class="label">房号</div>
+          <div class="room-code" id="roomCode">0000</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="btnCopyCode" type="button">复制房号</button>
+      </div>
+
+      <p class="room-msg" id="roomMsg">在等朋友进来…</p>
+      <div class="players" id="roomPlayers"></div>
+
+      <div class="waitbar"><div class="waitbar-fill" id="waitFill"></div></div>
+      <p class="hint" id="waitHint">一分钟凑不齐，就叫个机器人陪你</p>
+
+      <div class="room-actions">
+        <button class="btn btn-primary" id="btnStart" type="button" hidden>开始</button>
+        <button class="btn btn-ghost" id="btnLeave" type="button">算了，不玩了</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. 游戏 -->
+  <section class="view" id="view-game" hidden>
+    <div class="game">
+      <div class="game-players" id="gamePlayers"></div>
+
+      <div class="range-card">
+        <div class="range-label">现在藏在</div>
+        <div class="range-nums">
+          <span id="rangeLow">1</span><span class="range-dash">~</span><span id="rangeHigh">100</span>
+        </div>
+        <div class="range-bar"><div class="range-bar-fill" id="rangeFill"></div></div>
+        <div class="turn-line" id="turnLine">轮到你了</div>
+      </div>
+
+      <form class="guess-row" id="guessForm" autocomplete="off">
+        <input class="input input-big" id="guessInput" type="number" inputmode="numeric" placeholder="猜个数" />
+        <button class="btn btn-primary btn-guess" id="guessBtn" type="submit">猜！</button>
+      </form>
+
+      <div class="item-bar" id="itemBar" hidden>
+        <button class="item-btn" type="button" data-kind="shield" title="这一把踩雷不扣分">
+          <span class="iemoji">🛡️</span><span class="iname">免死</span><em class="iqty" id="qtyShield">0</em>
+        </button>
+        <button class="item-btn" type="button" data-kind="scan" title="告诉你炸弹在哪一半">
+          <span class="iemoji">🔍</span><span class="iname">探测</span><em class="iqty" id="qtyScan">0</em>
+        </button>
+        <button class="item-btn" type="button" data-kind="skip" title="这一轮跳过，让给下一位">
+          <span class="iemoji">💨</span><span class="iname">跳过</span><em class="iqty" id="qtySkip">0</em>
+        </button>
+      </div>
+      <p class="item-hint" id="itemHint" hidden></p>
+
+      <div class="log" id="guessLog"></div>
+
+      <div class="game-foot">
+        <button class="link-quiet" id="btnGameLeave" type="button">算了，不玩了 · 回大厅</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ================= 弹窗们 ================= -->
+
+<div class="modal" id="modalCreate" hidden>
+  <div class="modal-card">
+    <h2 class="modal-title">先定两件事</h2>
+    <p class="q">几个人一起玩？</p>
+    <div class="count-row" id="countRow"></div>
+    <p class="q">数字藏在哪个范围里？</p>
+    <div class="range-row">
+      <input class="input" id="createMin" type="number" inputmode="numeric" value="1" />
+      <span class="range-to">到</span>
+      <input class="input" id="createMax" type="number" inputmode="numeric" value="100" />
+    </div>
+    <p class="hint" id="createHint">最多一万个数，别太狠</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close type="button">再想想</button>
+      <button class="btn btn-primary" id="btnCreateConfirm" type="button">开张</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modalJoin" hidden>
+  <div class="modal-card">
+    <h2 class="modal-title">哪间屋？</h2>
+    <p class="q">把朋友发的 4 位房号填进来</p>
+    <input class="input input-room" id="joinCode" type="text" inputmode="numeric" maxlength="4" placeholder="0000" />
+    <p class="hint" id="joinHint">四位数字，问朋友要</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close type="button">算了</button>
+      <button class="btn btn-primary" id="btnJoinConfirm" type="button">进去</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modalProfile" hidden>
+  <div class="modal-card profile-card">
+    <div class="modal-head">
+      <h2 class="modal-title">我的资料</h2>
+      <button class="modal-x" data-close type="button">✕</button>
+    </div>
+
+    <div class="profile-top">
+      <span class="avatar avatar-xl" id="profileAvatar">🐱</span>
+      <div class="profile-head-info">
+        <div class="profile-name" id="profileNamePreview">朋友</div>
+        <div class="profile-bio" id="profileBioPreview">还没有签名</div>
+      </div>
+    </div>
+
+    <div class="profile-actions">
+      <button class="btn btn-ghost btn-sm" id="btnAlbumPick" type="button">🖼 从相册选</button>
+      <button class="btn btn-ghost btn-sm" id="btnProfileDraw" type="button">✍️ 画一个</button>
+    </div>
+
+    <div class="avatar-grid avatar-grid-lg" id="profileAvatarGrid"></div>
+
+    <label class="field">
+      <span class="field-label">名字</span>
+      <input class="input" id="profileName" maxlength="12" autocomplete="nickname" />
+    </label>
+    <label class="field">
+      <span class="field-label">签名</span>
+      <input class="input" id="profileBio" maxlength="60" placeholder="一句话介绍自己（选填）" />
+    </label>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-close type="button">取消</button>
+      <button class="btn btn-primary" id="profileSave" type="button">保存</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="albumFile" accept="image/*" hidden />
+
+<div class="modal" id="modalResult" hidden>
+  <div class="modal-card result-card">
+    <div class="result-emoji" id="resultEmoji">💥</div>
+    <h2 class="modal-title" id="resultTitle">踩到啦</h2>
+    <p class="result-sub" id="resultSub">数字是 42</p>
+    <div class="result-list" id="resultList"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btnResultLeave" type="button">回大厅</button>
+      <button class="btn btn-primary" id="btnResultAgain" type="button">再来一把</button>
+    </div>
+  </div>
+</div>
+
+<!-- 好友 -->
+<div class="modal" id="modalFriends" hidden>
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h2 class="modal-title">好友</h2>
+      <button class="modal-x" data-close type="button">✕</button>
+    </div>
+
+    <form class="row" id="friendForm" autocomplete="off">
+      <input class="input" id="friendName" maxlength="12" placeholder="输入名字加好友" />
+      <button class="btn btn-primary" type="submit">加</button>
+    </form>
+    <p class="hint" id="friendHint">名字要一模一样。对方点了同意，两边就能看见谁在不在线。</p>
+    <div class="search-list" id="friendSearch"></div>
+
+    <div id="friendRequestsBlock" hidden>
+      <h3 class="block-title">想加你的人</h3>
+      <div class="list" id="friendRequests"></div>
+    </div>
+
+    <h3 class="block-title">我的好友 <em id="friendCount">0</em></h3>
+    <div class="list" id="friendList"></div>
+  </div>
+</div>
+
+<!-- 信箱 -->
+<div class="modal" id="modalMail" hidden>
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h2 class="modal-title">信箱</h2>
+      <button class="modal-x" data-close type="button">✕</button>
+    </div>
+
+    <div class="tabs" id="mailTabs">
+      <button class="tab is-active" data-box="in" type="button">收件箱</button>
+      <button class="tab" data-box="out" type="button">发件箱</button>
+      <button class="tab" data-box="new" type="button">写信</button>
+    </div>
+
+    <div class="list" id="mailList"></div>
+
+    <div id="mailCompose" hidden>
+      <label class="field">
+        <span class="field-label">写给谁</span>
+        <input class="input" id="mailTo" maxlength="12" placeholder="名字，得写过一模一样" />
+      </label>
+      <label class="field">
+        <span class="field-label">标题</span>
+        <input class="input" id="mailSubject" maxlength="40" placeholder="随便写点什么" />
+      </label>
+      <label class="field">
+        <span class="field-label">正文</span>
+        <textarea class="input input-textarea" id="mailBody" rows="6" maxlength="2000" placeholder="想说什么就写什么，最多两千字"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="mailCancel" type="button">算了</button>
+        <button class="btn btn-primary" id="mailSend" type="button">寄出去</button>
+      </div>
+    </div>
+
+    <div id="mailDetail" hidden>
+      <button class="link-quiet mail-back" id="mailBack" type="button">← 回列表</button>
+      <h3 class="mail-subject" id="mailDetailSubject"></h3>
+      <p class="mail-meta" id="mailDetailMeta"></p>
+      <div class="mail-body" id="mailDetailBody"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="mailDelete" type="button">删掉</button>
+        <button class="btn btn-primary" id="mailReply" type="button">回一封</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 商店 -->
+<div class="modal" id="modalShop" hidden>
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h2 class="modal-title">道具商店</h2>
+      <button class="modal-x" data-close type="button">✕</button>
+    </div>
+    <p class="shop-coins">我的金币 <b id="shopCoins">0</b> <span class="coins-emoji">🪙</span>
+      <span class="shop-note">赢一局 +30，踩雷掉 1~100 金币</span></p>
+    <div class="shop-list" id="shopList"></div>
+    <p class="hint">道具开局后才能用，而且只在你轮到时生效；一把各能用一次。</p>
+  </div>
+</div>
+
+<!-- 对话 -->
+<div class="modal" id="modalChat" hidden>
+  <div class="modal-card modal-chat">
+    <!-- 左：会话列表 -->
+    <div class="chat-pane chat-list-pane" id="chatListPane">
+      <div class="modal-head">
+        <h2 class="modal-title">对话</h2>
+        <button class="modal-x" data-close type="button">✕</button>
+      </div>
+      <div class="chat-search">
+        <button class="link-quiet" id="chatPickFriend" type="button">＋ 找好友聊</button>
+      </div>
+      <div class="list" id="chatThreads"></div>
+    </div>
+
+    <!-- 右：对话内容 -->
+    <div class="chat-pane chat-main" id="chatMain" hidden>
+      <div class="chat-head">
+        <button class="chat-back" id="chatBack" type="button">←</button>
+        <div class="chat-peer" id="chatPeer"></div>
+      </div>
+      <div class="chat-stream" id="chatStream"></div>
+      <div class="chat-typing" id="chatTyping" hidden>对方正在输入…</div>
+      <form class="chat-compose" id="chatForm" autocomplete="off">
+        <button class="chat-emoji-btn" id="chatEmojiBtn" type="button" title="表情">🙂</button>
+        <input class="input" id="chatInput" maxlength="500" placeholder="说点什么…" />
+        <button class="btn btn-primary" type="submit" id="chatSend">发送</button>
+      </form>
+      <div class="chat-emoji-bar" id="chatEmojiBar" hidden></div>
+    </div>
+  </div>
+</div>
+
+<!-- 管理（管理员 / 开发者） -->
+<div class="modal" id="modalAdmin" hidden>
+  <div class="modal-card modal-wide">
+    <div class="modal-head">
+      <h2 class="modal-title">管理</h2>
+      <button class="modal-x" data-close type="button">✕</button>
+    </div>
+
+    <div class="tabs" id="adminTabs">
+      <button class="tab is-active" data-atab="online" type="button">在线</button>
+      <button class="tab" data-atab="rooms" type="button">房间</button>
+      <button class="tab" data-atab="announce" type="button">公告</button>
+      <button class="tab" id="adminRolesTab" data-atab="roles" type="button" hidden>任命</button>
+      <button class="tab" id="adminAccountsTab" data-atab="accounts" type="button" hidden>账号</button>
+      <button class="tab" id="adminDangerTab" data-atab="danger" type="button" hidden>危险区</button>
+    </div>
+
+    <div id="adminOnline" class="list"></div>
+
+    <div id="adminRooms" class="list" hidden></div>
+
+    <div id="adminAnnounce" hidden>
+      <label class="field">
+        <span class="field-label">发一条全站公告</span>
+        <input class="input" id="announceText" maxlength="120" placeholder="一句话，所有人都会弹出来" />
+      </label>
+      <p class="hint">公告只有管理员和开发者能发，最多 120 字，在线的人立刻收到。</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="clearLobbyBtn" type="button">清空大厅公屏</button>
+        <button class="btn btn-primary" id="announceSend" type="button">发出去</button>
+      </div>
+    </div>
+
+    <div id="adminRoles" hidden>
+      <form class="row" id="roleForm" autocomplete="off">
+        <input class="input" id="roleName" maxlength="12" placeholder="输入名字，任命/撤销管理员" />
+        <button class="btn btn-primary" type="submit">找到</button>
+      </form>
+      <div class="role-found" id="roleFound"></div>
+      <h3 class="block-title">现在的管理者</h3>
+      <div class="list" id="roleStaff"></div>
+      <p class="hint">管理员能踢人、禁言、发公告、解散房间；开发者还能任命管理员、调分送金币、删号、清场、重置游戏。开发者身份写在 appsettings.json 里，改不了。</p>
+    </div>
+
+    <div id="adminAccounts" hidden>
+      <div class="row">
+        <input class="input" id="accountSearch" placeholder="搜名字，或者直接看全部" autocomplete="off" />
+        <button class="btn btn-ghost" id="accountRefresh" type="button">刷新</button>
+      </div>
+      <div class="list" id="accountList"></div>
+      <p class="hint">这里是所有注册过的账号，最近上线的排在前面。删号只有开发者能做，名单里的开发者删不得。</p>
+    </div>
+
+    <div id="adminDanger" hidden>
+      <div class="danger-box">
+        <div class="danger-text">
+          <strong>清空所有玩家</strong>
+          <span class="hint">除了开发者，其他账号全部删除，好友、信件、私聊一起清掉，房间里的人也一并请出去。</span>
+        </div>
+        <button class="btn btn-danger btn-sm" id="wipeUsers" type="button">清空</button>
+      </div>
+      <div class="danger-box">
+        <div class="danger-text">
+          <strong>重置整个游戏</strong>
+          <span class="hint">账号都留着，积分回到 100、金币清零，好友/信件/聊天全清，所有房间解散。</span>
+        </div>
+        <button class="btn btn-danger btn-sm" id="resetGame" type="button">重置</button>
+      </div>
+      <p class="hint">这两个操作都要手打确认词，做了没法撤销。</p>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="/js/signalr.min.js?v=1.8.2"></script>
+<script src="/js/app.js?v=1.8.2"></script>
+<script src="/js/avatar.js?v=1.8.2"></script>
+<script src="/js/game.js?v=1.8.2"></script>
+<script src="/js/social.js?v=1.8.2"></script>
+<script src="/js/chat.js?v=1.8.2"></script>
+<script src="/js/mod.js?v=1.8.2"></script>
+</body>
+</html>

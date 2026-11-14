@@ -1,0 +1,14 @@
+bin/
+obj/
+app.db
+app.db-shm
+app.db-wal
+
+# 本机证书和后台密钥，别进仓库
+certs/
+admin.key
+
+# 隧道
+tools/
+tunnel.log
+tunnel-url.txt
