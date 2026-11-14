@@ -1826,3 +1826,149 @@ body.device-phone .app { padding-bottom: calc(72px + env(safe-area-inset-bottom)
   .profile-card .avatar-grid { grid-template-columns: repeat(4, 1fr); }
   .role-tag { letter-spacing: 0; }
 }
+
+/* =========================================================
+   1.9.0 —— 建房选玩法 + 你画我猜 + 贪吃蛇
+   ========================================================= */
+
+/* 建房：玩法三选一 */
+.gamepick-row { display: flex; gap: 8px; margin: 4px 0 10px; }
+.gamepick {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border-radius: var(--r-md, 12px);
+  border: 1.5px solid var(--line, #33333d);
+  background: transparent;
+  color: var(--dim, #8b8b96);
+  font-family: inherit;
+  font-size: var(--t-xs, 12px);
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.gamepick .ge { font-size: 22px; line-height: 1; }
+.gamepick:hover { border-color: var(--accent-soft, #666); color: var(--text, #eee); }
+.gamepick.is-active {
+  border-color: var(--accent, #ffb84d);
+  color: var(--text, #eee);
+  background: color-mix(in srgb, var(--accent, #ffb84d) 12%, transparent);
+}
+.range-wrap[hidden] { display: none; }
+
+/* 画猜画布 */
+.draw-panel, .snake-panel { display: flex; flex-direction: column; gap: 12px; }
+.draw-head, .snake-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.draw-word {
+  font-size: var(--t-md, 15px);
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.draw-timer { font-size: var(--t-sm, 13px); color: var(--dim); font-variant-numeric: tabular-nums; }
+.draw-timer.urgent { color: var(--danger, #ff6b6b); font-weight: 700; }
+.canvas-wrap {
+  border-radius: var(--r-lg, 16px);
+  overflow: hidden;
+  border: 1px solid var(--line, #33333d);
+  background: #fbf8f2;
+  line-height: 0;
+}
+#drawCanvas { width: 100%; aspect-ratio: 4 / 3; display: block; cursor: crosshair; background: #fbf8f2; }
+#snakeCanvas { width: 100%; aspect-ratio: 30 / 22; display: block; background: #151a13; touch-action: none; }
+
+/* 画笔工具栏 */
+.draw-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.draw-tools[hidden] { display: none; }
+.swatch {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2.5px solid transparent;
+  transition: transform .12s, border-color .12s;
+}
+.swatch.is-active { border-color: var(--accent, #ffb84d); transform: scale(1.12); }
+.sizer {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: 1.5px solid var(--line, #33333d);
+}
+.sizer.is-active { border-color: var(--accent, #ffb84d); }
+.sizer i { display: block; border-radius: 50%; background: var(--text, #eee); }
+.tool-sep { width: 1px; height: 22px; background: var(--line, #33333d); margin: 0 2px; }
+.tool-btn {
+  border: 1.5px solid var(--line, #33333d);
+  background: transparent;
+  color: var(--text, #eee);
+  font-family: inherit;
+  font-size: var(--t-xs, 12px);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.tool-btn:hover { border-color: var(--accent, #ffb84d); }
+
+.draw-guess-row { display: flex; gap: 10px; }
+.draw-guess-row .input-big { flex: 1; }
+.draw-choices .q { margin-bottom: 8px; }
+.draw-choice-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.choice-btn {
+  border: 1.5px dashed var(--accent, #ffb84d);
+  background: color-mix(in srgb, var(--accent, #ffb84d) 10%, transparent);
+  color: var(--text, #eee);
+  font-family: inherit;
+  font-size: var(--t-md, 15px);
+  font-weight: 700;
+  border-radius: var(--r-md, 12px);
+  padding: 10px 22px;
+  cursor: pointer;
+}
+.choice-btn:hover { background: color-mix(in srgb, var(--accent, #ffb84d) 20%, transparent); }
+
+.log-item.wrong { color: var(--dim); }
+.bomb-mark.good { background: #2f9e44; }
+
+/* 贪吃蛇 */
+.snake-pool {
+  font-size: var(--t-md, 15px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--accent, #ffb84d) 14%, transparent);
+  border-radius: 999px;
+  padding: 5px 14px;
+}
+.snake-help { font-size: var(--t-xs, 12px); color: var(--dim); text-align: center; }
+.snake-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--dot, var(--dim));
+  display: inline-block;
+}
+#snakeStatusLine.is-me { color: var(--accent, #ffb84d); }
+
+/* 手机适配 */
+@media (max-width: 640px) {
+  .gamepick-row { gap: 6px; }
+  .gamepick .ge { font-size: 19px; }
+  .gamepick { padding: 8px 4px; }
+  .swatch { width: 30px; height: 30px; }
+  .sizer { width: 34px; height: 34px; }
+  .draw-tools { gap: 6px; }
+  .draw-word { font-size: 14px; }
+  .snake-pool { font-size: 13px; padding: 4px 10px; }
+}

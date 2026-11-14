@@ -42,6 +42,8 @@ public sealed record PointDelta(int UserId, int Delta, bool IsBot, int Coins = 0
 public sealed class BombRoom
 {
     public string Code { get; init; } = "";
+    /// <summary>bomb = 数字炸弹，draw = 你画我猜，snake = 贪吃蛇大乱斗</summary>
+    public string GameType { get; set; } = "bomb";
     public RoomState State { get; set; } = RoomState.Waiting;
     public int Capacity { get; init; } = 2;
     public int HostUserId { get; set; }
@@ -63,6 +65,15 @@ public sealed class BombRoom
     public CancellationTokenSource WaitCts { get; } = new();
 
     public bool BotAdded { get; set; }
+
+    /// <summary>画猜的状态（只有画猜房有）</summary>
+    public DrawState? Draw { get; set; }
+    /// <summary>贪吃蛇的状态（只有贪吃蛇房有）</summary>
+    public SnakeState? Snake { get; set; }
+    /// <summary>画猜结算时的第一名（画猜没有"输家"，用这个字段顶住结果弹窗）</summary>
+    public int? DrawWinnerId { get; set; }
+    /// <summary>贪吃蛇结算时的第一名</summary>
+    public int? SnakeWinnerId { get; set; }
 
     public RoomPlayer? Current => Players.Count == 0 ? null : Players[Math.Clamp(TurnIndex, 0, Players.Count - 1)];
 }

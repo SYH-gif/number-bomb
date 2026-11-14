@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#0e1014" />
   <meta name="color-scheme" content="dark" />
   <!-- 版本号内联在页面里：进站就不用为了比版本多跑一次请求 -->
-  <meta name="nb-version" content="1.8.2" />
+  <meta name="nb-version" content="1.9.0" />
   <title>数字炸弹 · 悄悄猜</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💣</text></svg>" />
-  <link rel="stylesheet" href="/css/style.css?v=1.8.2" />
+  <link rel="stylesheet" href="/css/style.css?v=1.9.0" />
 </head>
 <body>
 
@@ -229,34 +229,84 @@
     <div class="game">
       <div class="game-players" id="gamePlayers"></div>
 
-      <div class="range-card">
-        <div class="range-label">现在藏在</div>
-        <div class="range-nums">
-          <span id="rangeLow">1</span><span class="range-dash">~</span><span id="rangeHigh">100</span>
+      <!-- 数字炸弹面板 -->
+      <div id="bombPanel" hidden>
+        <div class="range-card">
+          <div class="range-label">现在藏在</div>
+          <div class="range-nums">
+            <span id="rangeLow">1</span><span class="range-dash">~</span><span id="rangeHigh">100</span>
+          </div>
+          <div class="range-bar"><div class="range-bar-fill" id="rangeFill"></div></div>
+          <div class="turn-line" id="turnLine">轮到你了</div>
         </div>
-        <div class="range-bar"><div class="range-bar-fill" id="rangeFill"></div></div>
-        <div class="turn-line" id="turnLine">轮到你了</div>
+
+        <form class="guess-row" id="guessForm" autocomplete="off">
+          <input class="input input-big" id="guessInput" type="number" inputmode="numeric" placeholder="猜个数" />
+          <button class="btn btn-primary btn-guess" id="guessBtn" type="submit">猜！</button>
+        </form>
+
+        <div class="item-bar" id="itemBar" hidden>
+          <button class="item-btn" type="button" data-kind="shield" title="这一把踩雷不扣分">
+            <span class="iemoji">🛡️</span><span class="iname">免死</span><em class="iqty" id="qtyShield">0</em>
+          </button>
+          <button class="item-btn" type="button" data-kind="scan" title="告诉你炸弹在哪一半">
+            <span class="iemoji">🔍</span><span class="iname">探测</span><em class="iqty" id="qtyScan">0</em>
+          </button>
+          <button class="item-btn" type="button" data-kind="skip" title="这一轮跳过，让给下一位">
+            <span class="iemoji">💨</span><span class="iname">跳过</span><em class="iqty" id="qtySkip">0</em>
+          </button>
+        </div>
+        <p class="item-hint" id="itemHint" hidden></p>
+
+        <div class="log" id="guessLog"></div>
       </div>
 
-      <form class="guess-row" id="guessForm" autocomplete="off">
-        <input class="input input-big" id="guessInput" type="number" inputmode="numeric" placeholder="猜个数" />
-        <button class="btn btn-primary btn-guess" id="guessBtn" type="submit">猜！</button>
-      </form>
-
-      <div class="item-bar" id="itemBar" hidden>
-        <button class="item-btn" type="button" data-kind="shield" title="这一把踩雷不扣分">
-          <span class="iemoji">🛡️</span><span class="iname">免死</span><em class="iqty" id="qtyShield">0</em>
-        </button>
-        <button class="item-btn" type="button" data-kind="scan" title="告诉你炸弹在哪一半">
-          <span class="iemoji">🔍</span><span class="iname">探测</span><em class="iqty" id="qtyScan">0</em>
-        </button>
-        <button class="item-btn" type="button" data-kind="skip" title="这一轮跳过，让给下一位">
-          <span class="iemoji">💨</span><span class="iname">跳过</span><em class="iqty" id="qtySkip">0</em>
-        </button>
+      <!-- 你画我猜面板 -->
+      <div class="draw-panel" id="drawPanel" hidden>
+        <div class="draw-head">
+          <span class="draw-word" id="drawWordLine">等你来一轮</span>
+          <span class="draw-timer" id="drawTimer"></span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="drawCanvas" width="800" height="600"></canvas>
+        </div>
+        <div class="draw-tools" id="drawTools" hidden>
+          <span class="swatch is-active" data-c="#20242c" style="background:#20242c"></span>
+          <span class="swatch" data-c="#e03131" style="background:#e03131"></span>
+          <span class="swatch" data-c="#1971c2" style="background:#1971c2"></span>
+          <span class="swatch" data-c="#2f9e44" style="background:#2f9e44"></span>
+          <span class="swatch" data-c="#f59f00" style="background:#f59f00"></span>
+          <span class="swatch" data-c="#ffffff" style="background:#ffffff;border:1px solid var(--line)"></span>
+          <em class="tool-sep"></em>
+          <span class="sizer is-active" data-s="6"><i style="width:6px;height:6px"></i></span>
+          <span class="sizer" data-s="12"><i style="width:11px;height:11px"></i></span>
+          <span class="sizer" data-s="24"><i style="width:18px;height:18px"></i></span>
+          <em class="tool-sep"></em>
+          <button class="tool-btn" id="btnUndo" type="button">↩ 撤销</button>
+          <button class="tool-btn" id="btnClearCanvas" type="button">🧽 清空</button>
+        </div>
+        <form class="draw-guess-row" id="drawGuessForm" autocomplete="off">
+          <input class="input input-big" id="drawInput" type="text" maxlength="20" placeholder="猜猜画的是啥" />
+          <button class="btn btn-primary btn-guess" id="drawGuessBtn" type="submit">猜！</button>
+        </form>
+        <div class="log" id="drawLog"></div>
+        <div class="draw-choices" id="drawChoices" hidden>
+          <p class="q">挑一个来画：</p>
+          <div class="draw-choice-row" id="drawChoiceRow"></div>
+        </div>
       </div>
-      <p class="item-hint" id="itemHint" hidden></p>
 
-      <div class="log" id="guessLog"></div>
+      <!-- 贪吃蛇面板 -->
+      <div class="snake-panel" id="snakePanel" hidden>
+        <div class="snake-head">
+          <span class="turn-line" id="snakeStatusLine">行动起来</span>
+          <span class="snake-pool" id="snakePool" title="共享金币池：结束时全桌平分">🪙 0</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="snakeCanvas" width="840" height="616"></canvas>
+        </div>
+        <p class="snake-help" id="snakeHelp">电脑：方向键 / WASD 转向 · 手机：往哪滑就往哪拐</p>
+      </div>
 
       <div class="game-foot">
         <button class="link-quiet" id="btnGameLeave" type="button">算了，不玩了 · 回大厅</button>
@@ -270,14 +320,22 @@
 
 <div class="modal" id="modalCreate" hidden>
   <div class="modal-card">
-    <h2 class="modal-title">先定两件事</h2>
+    <h2 class="modal-title">先定几件事</h2>
+    <p class="q">玩哪个？</p>
+    <div class="gamepick-row" id="gamePickRow">
+      <button type="button" class="gamepick is-active" data-g="bomb"><span class="ge">💣</span><span>数字炸弹</span></button>
+      <button type="button" class="gamepick" data-g="draw"><span class="ge">🎨</span><span>你画我猜</span></button>
+      <button type="button" class="gamepick" data-g="snake"><span class="ge">🐍</span><span>贪吃蛇</span></button>
+    </div>
     <p class="q">几个人一起玩？</p>
     <div class="count-row" id="countRow"></div>
-    <p class="q">数字藏在哪个范围里？</p>
-    <div class="range-row">
-      <input class="input" id="createMin" type="number" inputmode="numeric" value="1" />
-      <span class="range-to">到</span>
-      <input class="input" id="createMax" type="number" inputmode="numeric" value="100" />
+    <div class="range-wrap" id="rangeWrap">
+      <p class="q">数字藏在哪个范围里？</p>
+      <div class="range-row">
+        <input class="input" id="createMin" type="number" inputmode="numeric" value="1" />
+        <span class="range-to">到</span>
+        <input class="input" id="createMax" type="number" inputmode="numeric" value="100" />
+      </div>
     </div>
     <p class="hint" id="createHint">最多一万个数，别太狠</p>
     <div class="modal-actions">
@@ -548,12 +606,14 @@
 
 <div class="toast-wrap" id="toastWrap"></div>
 
-<script src="/js/signalr.min.js?v=1.8.2"></script>
-<script src="/js/app.js?v=1.8.2"></script>
-<script src="/js/avatar.js?v=1.8.2"></script>
-<script src="/js/game.js?v=1.8.2"></script>
-<script src="/js/social.js?v=1.8.2"></script>
-<script src="/js/chat.js?v=1.8.2"></script>
-<script src="/js/mod.js?v=1.8.2"></script>
+<script src="/js/signalr.min.js?v=1.9.0"></script>
+<script src="/js/app.js?v=1.9.0"></script>
+<script src="/js/avatar.js?v=1.9.0"></script>
+<script src="/js/game.js?v=1.9.0"></script>
+<script src="/js/draw.js?v=1.9.0"></script>
+<script src="/js/snake.js?v=1.9.0"></script>
+<script src="/js/social.js?v=1.9.0"></script>
+<script src="/js/chat.js?v=1.9.0"></script>
+<script src="/js/mod.js?v=1.9.0"></script>
 </body>
 </html>

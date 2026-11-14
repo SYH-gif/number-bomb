@@ -60,14 +60,19 @@ public sealed class RoomManager
 
     // ---------------------------------------------------------------- 建房 / 进房
 
-    public RoomResult CreateRoom(UserRow user, string? connectionId, int capacity, int min, int max)
+    public RoomResult CreateRoom(UserRow user, string? connectionId, int capacity, int min, int max, string gameType = "bomb")
     {
         capacity = Math.Clamp(capacity, 2, MaxPlayers);
+        gameType = (gameType ?? "bomb").Trim().ToLowerInvariant();
+        if (gameType is not ("bomb" or "draw" or "snake")) gameType = "bomb";
 
-        if (max < min) (min, max) = (max, min);
-        if (min < 0) return RoomResult.Fail("从 0 开始数比较舒服");
-        if (max <= min) return RoomResult.Fail("两个数得不一样哦");
-        if (max - min > MaxSpan) return RoomResult.Fail("范围太大啦，收一收（最多一万个数）");
+        if (gameType == "bomb")
+        {
+            if (max < min) (min, max) = (max, min);
+            if (min < 0) return RoomResult.Fail("从 0 开始数比较舒服");
+            if (max <= min) return RoomResult.Fail("两个数得不一样哦");
+            if (max - min > MaxSpan) return RoomResult.Fail("范围太大啦，收一收（最多一万个数）");
+        }
 
         foreach (var old in LeaveAllExcept(user.Id, null)) Broadcast(old);
         BombRoom room;
@@ -77,12 +82,13 @@ public sealed class RoomManager
             room = new BombRoom
             {
                 Code = code,
+                GameType = gameType,
                 Capacity = capacity,
                 HostUserId = user.Id,
-                Min = min,
-                Max = max,
-                Low = min,
-                High = max,
+                Min = gameType == "bomb" ? min : 0,
+                Max = gameType == "bomb" ? max : 100,
+                Low = gameType == "bomb" ? min : 0,
+                High = gameType == "bomb" ? max : 100,
                 WaitUntil = DateTime.UtcNow.Add(WaitForHumans)
             };
             room.Players.Add(new RoomPlayer
@@ -192,13 +198,10 @@ public sealed class RoomManager
     private void StartLocked(BombRoom room)
     {
         room.State = RoomState.Playing;
-        room.Bomb = Random.Shared.Next(room.Min, room.Max + 1);
-        room.Low = room.Min;
-        room.High = room.Max;
-        room.Guesses.Clear();
+        room.Round++;
         room.Deltas.Clear();
         room.LoserId = null;
-        room.Round++;
+        room.BotAdded = false;
         foreach (var p in room.Players)
         {
             p.IsOut = false;
@@ -207,11 +210,377 @@ public sealed class RoomManager
             p.Shielded = false;
             p.UsedItems.Clear();
         }
-        room.TurnIndex = Random.Shared.Next(room.Players.Count);
-        try { room.WaitCts.Cancel(); } catch { /* 已经结束了 */ }
+        CancelTimersLocked(room);
 
-        _log.LogInformation("房间 {Code} 第 {Round} 局开始，范围 {Min}-{Max}，{Count} 人",
-            room.Code, room.Round, room.Min, room.Max, room.Players.Count);
+        switch (room.GameType)
+        {
+            case "draw":
+                StartDrawLocked(room);
+                break;
+            case "snake":
+                StartSnakeLocked(room);
+                break;
+            default:
+                StartBombLocked(room);
+                break;
+        }
+
+        _log.LogInformation("房间 {Code} 第 {Round} 局开始（{Type}），{Count} 人",
+            room.Code, room.Round, room.GameType, room.Players.Count);
+    }
+
+    private void StartBombLocked(BombRoom room)
+    {
+        room.Bomb = Random.Shared.Next(room.Min, room.Max + 1);
+        room.Low = room.Min;
+        room.High = room.Max;
+        room.Guesses.Clear();
+        room.TurnIndex = Random.Shared.Next(room.Players.Count);
+    }
+
+    // ---------------------------------------------------------------- 你画我猜
+
+    private const int DrawChooseSeconds = 15;
+    private const int DrawSeconds = 80;
+    private const int DrawBetweenSeconds = 4;
+
+    private void StartDrawLocked(BombRoom room)
+    {
+        room.Draw = new DrawState
+        {
+            DrawerIdx = Random.Shared.Next(room.Players.Count)
+        };
+        room.Draw.DrawerPid = room.Players[room.Draw.DrawerIdx].UserId;
+        BeginChoosingLocked(room);
+    }
+
+    /// <summary>进入"画手挑词"阶段，15 秒不挑就随机选一个</summary>
+    private void BeginChoosingLocked(BombRoom room)
+    {
+        var draw = room.Draw!;
+        draw.Phase = "choosing";
+        draw.Choices.Clear();
+        draw.Choices.AddRange(DrawWords.Pick(3));
+        draw.Word = "";
+        draw.GuessedIds.Clear();
+        draw.Strokes.Clear();
+        draw.PhaseUntil = DateTime.UtcNow.AddSeconds(DrawChooseSeconds);
+
+        ArmDrawTimer(room.Code, DrawChooseSeconds);
+    }
+
+    private void BeginDrawingLocked(BombRoom room, string word)
+    {
+        var draw = room.Draw!;
+        draw.Phase = "drawing";
+        draw.Word = word;
+        draw.Choices.Clear();
+        draw.GuessedIds.Clear();
+        draw.Strokes.Clear();
+        draw.PhaseUntil = DateTime.UtcNow.AddSeconds(DrawSeconds);
+
+        ArmDrawTimer(room.Code, DrawSeconds);
+    }
+
+    private void ArmDrawTimer(string code, int seconds)
+    {
+        BombRoom? room;
+        CancellationToken token;
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out room) || room.Draw is null) return;
+            token = room.Draw.PhaseCts.Token;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(seconds), token); }
+            catch (OperationCanceledException) { return; }
+            OnDrawPhaseTimeout(code);
+        });
+    }
+
+    private void OnDrawPhaseTimeout(string code)
+    {
+        bool movedOn = false;
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Draw is null || room.State != RoomState.Playing) return;
+            var draw = room.Draw;
+
+            // 旧计时器到点了，但阶段早就翻篇（比如画手提前挑了词）。PhaseUntil 被推后了就不动。
+            if (DateTime.UtcNow < draw.PhaseUntil) return;
+
+            switch (draw.Phase)
+            {
+                case "choosing":
+                    // 挑词超时，随便替他选一个
+                    BeginDrawingLocked(room, draw.Choices.Count > 0 ? draw.Choices[0] : DrawWords.PickOne());
+                    movedOn = true;
+                    break;
+
+                case "drawing":
+                    // 画的时间到了，没人全猜对也翻篇
+                    EndDrawTurnLocked(room);
+                    movedOn = true;
+                    break;
+            }
+        }
+        if (movedOn) AfterDrawTurnChanged(code);
+    }
+
+    /// <summary>一个词画完（全猜对 / 超时 / 人走了）：算分、翻到下一位或收场</summary>
+    private void EndDrawTurnLocked(BombRoom room)
+    {
+        var draw = room.Draw!;
+        var drawer = room.Players.FirstOrDefault(p => p.UserId == draw.DrawerPid);
+
+        // 画手每有一个猜对的 +8 分 +10 金币；猜对的人各 +10 分 +10 金币
+        var correctCount = draw.GuessedIds.Count;
+        if (drawer is not null && correctCount > 0 && !drawer.IsBot)
+            draw.AddScore(drawer.UserId, DrawScores.PerGuesser * correctCount, DrawScores.CoinsPerCorrect * correctCount);
+
+        foreach (var gid in draw.GuessedIds)
+        {
+            draw.AddScore(gid, DrawScores.Correct, DrawScores.CoinsPerCorrect);
+        }
+
+        var total = room.Players.Count(p => !p.IsBot);
+        if (draw.TurnNo >= total || room.Players.Count < 2)
+        {
+            FinishDrawLocked(room);
+            return;
+        }
+
+        draw.TurnNo++;
+        // 顺位换下一位画手
+        for (var step = 1; step <= room.Players.Count; step++)
+        {
+            var idx = (draw.DrawerIdx + step) % room.Players.Count;
+            if (room.Players[idx].UserId != draw.DrawerPid || step == room.Players.Count)
+            {
+                draw.DrawerIdx = idx;
+                break;
+            }
+        }
+        draw.DrawerPid = room.Players[draw.DrawerIdx].UserId;
+        BeginChoosingLocked(room);
+    }
+
+    private void FinishDrawLocked(BombRoom room)
+    {
+        room.State = RoomState.Finished;
+        var draw = room.Draw!;
+        try { draw.PhaseCts.Cancel(); } catch { }
+
+        var winner = draw.Scores.Count > 0
+            ? draw.Scores.OrderByDescending(kv => kv.Value).First().Key
+            : (int?)null;
+        room.LoserId = null;
+
+        foreach (var p in room.Players)
+        {
+            var pts = draw.Scores.TryGetValue(p.UserId, out var s) ? s : 0;
+            var coins = draw.CoinsEarned.TryGetValue(p.UserId, out var c) ? c : 0;
+            p.Points = Math.Max(0, p.Points + pts);
+            if (!p.IsBot) p.Coins = Math.Max(0, p.Coins + coins);
+            room.Deltas.Add(new PointDelta(p.UserId, pts, p.IsBot, coins));
+        }
+        room.DrawWinnerId = winner;
+        PersistPoints(room.Deltas);
+        Broadcast(room.Code);
+    }
+
+    /// <summary>画猜轮换后：广播状态，并单独把词/候选词塞给画手本人</summary>
+    private void AfterDrawTurnChanged(string code)
+    {
+        Broadcast(code);
+        SendDrawerSecrets(code);
+    }
+
+    /// <summary>把当前词（画中）或候选词（挑词）私下发给画手</summary>
+    private void SendDrawerSecrets(string code)
+    {
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Draw is null) return;
+            var draw = room.Draw;
+            var drawer = room.Players.FirstOrDefault(pp => pp.UserId == draw.DrawerPid);
+            if (drawer is null) return;
+            if (drawer.IsBot) return;
+
+            if (draw.Phase == "choosing")
+            {
+                _ = _hub.Clients.Group(SocialService.UserKey(drawer.UserId))
+                    .SendAsync("drawChoices", new { words = draw.Choices.ToArray() });
+            }
+            else if (draw.Phase == "drawing")
+            {
+                _ = _hub.Clients.Group(SocialService.UserKey(drawer.UserId))
+                    .SendAsync("drawWord", new { word = draw.Word });
+            }
+        }
+    }
+
+    /// <summary>画手挑词。必须是当前画手本人。</summary>
+    public RoomResult ChooseWord(string code, int userId, int idx)
+    {
+        bool began = false;
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Draw is null) return RoomResult.Fail("这局已经散啦");
+            if (room.State != RoomState.Playing) return RoomResult.Fail("现在不是挑词的时候");
+            var draw = room.Draw;
+            var drawer = room.Players.FirstOrDefault(pp => pp.UserId == draw.DrawerPid);
+            if (drawer is null) return RoomResult.Fail("画手不在了，等下一轮");
+            if (drawer.UserId != userId) return RoomResult.Fail("现在不是你画哦");
+            if (draw.Phase != "choosing") return RoomResult.Fail("已经挑过啦");
+            if (idx < 0 || idx >= draw.Choices.Count) return RoomResult.Fail("挑一个给出的词哦");
+
+            BeginDrawingLocked(room, draw.Choices[idx]);
+            began = true;
+        }
+        if (began)
+        {
+            AfterDrawTurnChanged(code);
+            // 画手也要马上知道词
+            SendDrawerSecrets(code);
+        }
+        return RoomResult.Done(code);
+    }
+
+    /// <summary>画手落笔。一笔上限 240 个点，整幅画最多 500 笔。</summary>
+    public RoomResult AddStroke(string code, int userId, int size, string color, int[] points)
+    {
+        DrawStroke? stroke = null;
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Draw is null) return RoomResult.Fail("这局已经散啦");
+            if (room.State != RoomState.Playing) return RoomResult.Fail("现在还不能画");
+            var draw = room.Draw;
+            var drawer = room.Players.FirstOrDefault(pp => pp.UserId == draw.DrawerPid);
+            if (drawer is null) return RoomResult.Fail("画手不在了，等下一轮");
+            if (drawer.UserId != userId) return RoomResult.Fail("只有画的人才能动笔哦");
+            if (draw.Phase != "drawing") return RoomResult.Fail("还没开始画呢");
+
+            if (points is null || points.Length < 2 || points.Length > 480) return RoomResult.Fail("这一笔有点问题");
+            if (draw.Strokes.Count >= 500) return RoomResult.Fail("画得太满了，先清一清");
+
+            stroke = new DrawStroke
+            {
+                Id = ++draw.NextStrokeId,
+                Pid = userId,
+                Color = string.IsNullOrWhiteSpace(color) ? "#20242c" : color[..Math.Min(color.Length, 16)],
+                Size = Math.Clamp(size, 2, 40),
+                Points = points.ToList()
+            };
+            draw.Strokes.Add(stroke);
+        }
+        _ = _hub.Clients.Group(Key(code)).SendAsync("drawAdd", new
+        {
+            sid = stroke!.Id,
+            pid = stroke.Pid,
+            color = stroke.Color,
+            size = stroke.Size,
+            pts = stroke.Points
+        });
+        return RoomResult.Done(code);
+    }
+
+    /// <summary>画手撤销最后一笔</summary>
+    public RoomResult UndoStroke(string code, int userId)
+    {
+        int? sid = null;
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Draw is null) return RoomResult.Fail("这局已经散啦");
+            var draw = room.Draw;
+            var drawer = room.Players.FirstOrDefault(pp => pp.UserId == draw.DrawerPid);
+            if (drawer is null) return RoomResult.Fail("画手不在了，等下一轮");
+            if (drawer.UserId != userId) return RoomResult.Fail("只有画的人能撤");
+            if (draw.Strokes.Count == 0) return RoomResult.Fail("没有可以撤的了");
+
+            var last = draw.Strokes[^1];
+            draw.Strokes.RemoveAt(draw.Strokes.Count - 1);
+            sid = last.Id;
+        }
+        _ = _hub.Clients.Group(Key(code)).SendAsync("drawDel", new { sid });
+        return RoomResult.Done(code);
+    }
+
+    /// <summary>画手清空画布</summary>
+    public RoomResult ClearCanvas(string code, int userId)
+    {
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Draw is null) return RoomResult.Fail("这局已经散啦");
+            var draw = room.Draw;
+            var drawer = room.Players.FirstOrDefault(pp => pp.UserId == draw.DrawerPid);
+            if (drawer is null) return RoomResult.Fail("画手不在了，等下一轮");
+            if (drawer.UserId != userId) return RoomResult.Fail("只有画的人能清");
+            draw.Strokes.Clear();
+        }
+        _ = _hub.Clients.Group(Key(code)).SendAsync("drawClear");
+        return RoomResult.Done(code);
+    }
+
+    /// <summary>猜词。猜对当场广播，全桌猜对就翻篇。</summary>
+    public async Task<RoomResult> GuessWord(string code, int userId, string text)
+    {
+        text = (text ?? "").Trim();
+        if (text.Length == 0) return RoomResult.Fail("先写点什么");
+
+        bool correct = false;
+        string? guesserName = null;
+        bool turnEnded = false;
+        string? word = null;
+
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Draw is null) return RoomResult.Fail("这局已经散啦");
+            if (room.State != RoomState.Playing) return RoomResult.Fail("现在不能猜");
+            var draw = room.Draw;
+            if (draw.Phase != "drawing") return RoomResult.Fail("现在不能猜");
+
+            var drawer = room.Players.FirstOrDefault(pp => pp.UserId == draw.DrawerPid);
+            if (drawer is null) return RoomResult.Fail("画手不在了，等下一轮");
+            if (drawer.UserId == userId) return RoomResult.Fail("你画你猜，哪有这种好事");
+            var me = room.Players.FirstOrDefault(p => p.UserId == userId);
+            if (me is null) return RoomResult.Fail("你不在这桌上");
+            if (me.IsBot) return RoomResult.Fail("机器人不参与猜词");
+            if (draw.GuessedIds.Contains(userId)) return RoomResult.Fail("你已经猜对啦，等别人");
+
+            guesserName = me.Name;
+            word = draw.Word;
+            if (string.Equals(text.Trim(), draw.Word.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                draw.GuessedIds.Add(userId);
+                correct = true;
+                var guessers = room.Players.Count(p => !p.IsBot && p.UserId != drawer.UserId);
+                if (draw.GuessedIds.Count >= guessers) turnEnded = true;
+            }
+        }
+
+        if (correct)
+        {
+            await _hub.Clients.Group(Key(code)).SendAsync("drawCorrect", new { pid = userId, name = guesserName });
+            if (turnEnded)
+            {
+                lock (_sync)
+                {
+                    if (_rooms.TryGetValue(code, out var room) && room.Draw is not null && room.State == RoomState.Playing)
+                    {
+                        EndDrawTurnLocked(room);
+                    }
+                }
+                AfterDrawTurnChanged(code);
+            }
+            return RoomResult.Done(code);
+        }
+
+        // 猜错了：把这句当成房内闲聊广播，给画手提示别画到答案
+        await _hub.Clients.Group(Key(code)).SendAsync("drawWrong", new { pid = userId, name = guesserName, text });
+        return RoomResult.Done(code);
     }
 
     // ---------------------------------------------------------------- 猜数字
@@ -224,6 +593,7 @@ public sealed class RoomManager
         lock (_sync)
         {
             if (!_rooms.TryGetValue(code, out var room)) return RoomResult.Fail("这局已经散啦");
+            if (room.GameType != "bomb") return RoomResult.Fail("这间房玩的是别的，不是猜数字哦");
             if (room.State != RoomState.Playing) return RoomResult.Fail("现在还不能猜哦");
 
             var current = room.Current;
@@ -382,6 +752,7 @@ public sealed class RoomManager
         lock (_sync)
         {
             if (!_rooms.TryGetValue(code, out var room)) return new ItemResult(false, "这局已经散啦");
+            if (room.GameType != "bomb") return new ItemResult(false, "这间房用不上道具");
             if (room.State != RoomState.Playing) return new ItemResult(false, "现在还用不上道具");
 
             var p = room.Players.FirstOrDefault(x => x.UserId == userId);
@@ -442,7 +813,7 @@ public sealed class RoomManager
                 RemovePlayerLocked(room, player);
                 if (room.Players.Count == 0)
                 {
-                    try { room.WaitCts.Cancel(); } catch { }
+                    CancelTimersLocked(room);
                     _rooms.Remove(room.Code);
                 }
                 else
@@ -499,7 +870,7 @@ public sealed class RoomManager
 
             if (room.Players.Count == 0)
             {
-                try { room.WaitCts.Cancel(); } catch { }
+                CancelTimersLocked(room);
                 _rooms.Remove(room.Code);
                 code = null;
             }
@@ -525,7 +896,7 @@ public sealed class RoomManager
             RemovePlayerLocked(room, room.Players.First(p => p.UserId == userId));
             if (room.Players.Count == 0)
             {
-                try { room.WaitCts.Cancel(); } catch { }
+                CancelTimersLocked(room);
                 _rooms.Remove(code);
             }
         }
@@ -544,7 +915,7 @@ public sealed class RoomManager
         {
             if (!_rooms.TryGetValue(code, out var room)) return new List<int>();
             people = room.Players.Where(p => !p.IsBot).Select(p => p.UserId).ToList();
-            try { room.WaitCts.Cancel(); } catch { }
+            CancelTimersLocked(room);
             _rooms.Remove(code);
         }
         Broadcast(code);
@@ -589,7 +960,7 @@ public sealed class RoomManager
 
                 if (room.Players.Count == 0)
                 {
-                    try { room.WaitCts.Cancel(); } catch { }
+                    CancelTimersLocked(room);
                     _rooms.Remove(room.Code);
                 }
                 else affected.Add(room.Code);
@@ -625,6 +996,9 @@ public sealed class RoomManager
         if (idx < 0) return;
 
         var wasTurn = room.State == RoomState.Playing && room.TurnIndex == idx;
+        // 画猜：离开的人是不是正在画的那位（移除前先记下来）
+        var wasDrawer = room.State == RoomState.Playing && room.Draw is not null
+            && room.Draw.DrawerIdx == idx;
         room.Players.RemoveAt(idx);
 
         if (room.TurnIndex > idx) room.TurnIndex--;
@@ -635,8 +1009,53 @@ public sealed class RoomManager
 
         if (room.State == RoomState.Playing)
         {
-            var humansLeft = room.Players.Count(p => !p.IsBot && p.ConnectionId is not null);
-            if (room.Players.Count < 2 || humansLeft == 0)
+            // 画猜：画的人走了就翻到下一位；猜的人走了少算一个
+            if (room.GameType == "draw" && room.Draw is not null)
+            {
+                var draw = room.Draw;
+                var humans = room.Players.Count(p => !p.IsBot);
+                if (humans < 2 || room.Players.Count < 2)
+                {
+                    room.State = RoomState.Finished;
+                    room.LoserId = null;
+                    room.Deltas.Clear();
+                    try { draw.PhaseCts.Cancel(); } catch { }
+                    return;
+                }
+                if (draw.DrawerIdx >= room.Players.Count) draw.DrawerIdx = 0;
+                if (wasDrawer)
+                {
+                    EndDrawTurnLocked(room);
+                }
+                return;
+            }
+
+            // 贪吃蛇：这个人下场，身子变食物
+            if (room.GameType == "snake" && room.Snake is not null)
+            {
+                var sp = room.Snake.Snakes.FirstOrDefault(s => s.Pid == player.UserId);
+                if (sp is { Alive: true })
+                {
+                    sp.Alive = false;
+                    foreach (var c in sp.Cells)
+                    {
+                        if (room.Snake.Foods.Count < 40 && !room.Snake.Foods.Any(f => f[0] == c[0] && f[1] == c[1]))
+                            room.Snake.Foods.Add(new[] { c[0], c[1] });
+                    }
+                    sp.Cells.Clear();
+                }
+
+                var humansLeft = room.Players.Count(p => !p.IsBot);
+                if (room.Players.Count < 2 || humansLeft == 0)
+                {
+                    FinishSnakeLocked(room);
+                    return;
+                }
+                return;
+            }
+
+            var bombHumansLeft = room.Players.Count(p => !p.IsBot && p.ConnectionId is not null);
+            if (room.Players.Count < 2 || bombHumansLeft == 0)
             {
                 room.State = RoomState.Finished;
                 room.LoserId = null;
@@ -680,15 +1099,36 @@ public sealed class RoomManager
     private void OnWaitTimeout(string code)
     {
         string? botName = null;
+        bool rearm = false;
         lock (_sync)
         {
             if (!_rooms.TryGetValue(code, out var room) || room.State != RoomState.Waiting) return;
 
-            if (room.Players.Count < 2)
+            if (room.GameType == "draw")
+            {
+                // 画猜没有机器人能顶（画不了画也猜不了词），继续等真人
+                if (room.Players.Count < 2)
+                {
+                    room.WaitUntil = DateTime.UtcNow.Add(WaitForHumans);
+                    rearm = true;
+                }
+            }
+            else if (room.Players.Count < 2)
             {
                 botName = AddBotLocked(room);
             }
-            StartLocked(room);
+
+            if (!rearm) StartLocked(room);
+        }
+
+        if (rearm)
+        {
+            BombRoom? room2;
+            lock (_sync) { _rooms.TryGetValue(code, out room2); }
+            if (room2 is not null) ArmWaitTimer(room2);
+            Notice(code, "还差一位真人，画猜房等得起，别急 🎨");
+            Broadcast(code);
+            return;
         }
 
         if (botName is not null) Notice(code, $"一分钟了，{botName} 先顶上陪你玩 🤖");
@@ -715,11 +1155,20 @@ public sealed class RoomManager
         return name;
     }
 
+    /// <summary>房间收摊或开局时，把所有挂着的定时器一起掐掉</summary>
+    private static void CancelTimersLocked(BombRoom room)
+    {
+        try { room.WaitCts.Cancel(); } catch { /* 已取消 */ }
+        if (room.Draw is not null) { try { room.Draw.PhaseCts.Cancel(); } catch { } }
+        if (room.Snake is not null) { try { room.Snake.TickCts.Cancel(); } catch { } }
+    }
+
     private void MaybeScheduleBot(string code)
     {
         lock (_sync)
         {
             if (!_rooms.TryGetValue(code, out var room)) return;
+            if (room.GameType != "bomb") return;   // 只有数字炸弹有回合制机器人
             if (room.State != RoomState.Playing) return;
             if (room.Current is not { IsBot: true }) return;
         }
@@ -769,17 +1218,326 @@ public sealed class RoomManager
         return Math.Clamp(guess, low, high);
     }
 
+    // ---------------------------------------------------------------- 贪吃蛇大乱斗
+
+    private static readonly string[] SnakeColors = { "#e8590c", "#1971c2", "#2f9e44", "#9c36b5", "#e03131", "#f59f00", "#0c8599", "#7048e8" };
+
+    private void StartSnakeLocked(BombRoom room)
+    {
+        var snake = room.Snake = new SnakeState { EndAt = DateTime.UtcNow.Add(SnakeState.MaxDuration) };
+        snake.Snakes.Clear();
+        snake.Foods.Clear();
+        snake.Pool = 0;
+
+        // 出生点均匀撒在边缘一圈，朝向场地中心
+        var n = room.Players.Count;
+        for (var i = 0; i < n; i++)
+        {
+            var p = room.Players[i];
+            var (x, y, dx, dy) = SpawnPoint(i, n);
+            var sp = new SnakePlayer
+            {
+                Pid = p.UserId,
+                ColorIdx = i % SnakeColors.Length,
+                IsBot = p.IsBot,
+                Dx = dx,
+                Dy = dy
+            };
+            for (var k = 0; k < SnakeState.StartLen; k++)
+                sp.Cells.Add(new[] { x - dx * k, y - dy * k });
+            snake.Snakes.Add(sp);
+        }
+
+        for (var f = 0; f < SnakeState.MaxFoods; f++) SpawnFoodLocked(snake);
+        ArmSnakeLoop(room.Code);
+    }
+
+    /// <summary>第 i 个玩家的出生点：围一圈，头朝里</summary>
+    private static (int X, int Y, int Dx, int Dy) SpawnPoint(int i, int n)
+    {
+        var w = SnakeState.W;
+        var h = SnakeState.H;
+        var perimeter = 2 * (w + h);
+        var pos = (int)((long)i * perimeter / Math.Max(1, n));
+        if (pos < w) return (pos, 0, 0, 1);                       // 上边，向下
+        pos -= w;
+        if (pos < h) return (w - 1, pos, -1, 0);                  // 右边，向左
+        pos -= h;
+        if (pos < w) return (w - 1 - pos, h - 1, 0, -1);          // 下边，向上
+        pos -= w;
+        return (0, h - 1 - pos, 1, 0);                            // 左边，向右
+    }
+
+    private static void SpawnFoodLocked(SnakeState snake)
+    {
+        for (var t = 0; t < 200; t++)
+        {
+            var x = Random.Shared.Next(SnakeState.W);
+            var y = Random.Shared.Next(SnakeState.H);
+            if (IsOccupied(snake, x, y)) continue;
+            if (snake.Foods.Any(f => f[0] == x && f[1] == y)) continue;
+            snake.Foods.Add(new[] { x, y });
+            return;
+        }
+    }
+
+    private static bool IsOccupied(SnakeState snake, int x, int y)
+        => snake.Snakes.Any(s => s.Alive && s.Cells.Any(c => c[0] == x && c[1] == y));
+
+    private void ArmSnakeLoop(string code)
+    {
+        SnakeState? mySnake;
+        CancellationToken token;
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Snake is null) return;
+            if (room.Snake.LoopRunning) return;
+            room.Snake.LoopRunning = true;
+            mySnake = room.Snake;
+            token = mySnake.TickCts.Token;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                try { await Task.Delay(SnakeState.TickMs, token); }
+                catch (OperationCanceledException) { return; }
+
+                var end = false;
+                lock (_sync)
+                {
+                    if (!_rooms.TryGetValue(code, out var room) || room.Snake is null || !ReferenceEquals(room.Snake, mySnake)
+                        || room.State != RoomState.Playing)
+                        return;
+                    end = TickSnakeLocked(room);
+                }
+                Broadcast(code);
+                if (end) return;
+            }
+        });
+    }
+
+    /// <summary>走一步。返回 true = 这一局结束了。</summary>
+    private bool TickSnakeLocked(BombRoom room)
+    {
+        var snake = room.Snake!;
+        var alive = snake.Snakes.Where(s => s.Alive).ToList();
+        if (alive.Count == 0) { FinishSnakeLocked(room); return true; }
+
+        // 机器人先想好这一步往哪走
+        foreach (var bot in alive.Where(s => s.IsBot))
+            BotSteerLocked(snake, bot);
+
+        // 应用转方向（不许原地掉头）
+        foreach (var s in alive)
+        {
+            while (s.Pending.Count > 0)
+            {
+                var d = s.Pending[0];
+                s.Pending.RemoveAt(0);
+                if (d[0] == -s.Dx && d[1] == -s.Dy && s.Cells.Count > 1) continue;
+                if (d[0] == s.Dx && d[1] == s.Dy) continue;
+                s.Dx = d[0]; s.Dy = d[1];
+                break;
+            }
+        }
+
+        // 先算所有人要去的格子
+        var newHeads = new Dictionary<SnakePlayer, int[]>();
+        foreach (var s in alive)
+        {
+            var head = s.Cells[0];
+            newHeads[s] = new[] { head[0] + s.Dx, head[1] + s.Dy };
+        }
+
+        // 判死刑：撞墙 / 撞肚子（任何蛇的身子，含自己）/ 头对头
+        var dead = new HashSet<SnakePlayer>();
+        foreach (var (s, head) in newHeads)
+        {
+            if (head[0] < 0 || head[0] >= SnakeState.W || head[1] < 0 || head[1] >= SnakeState.H)
+            {
+                dead.Add(s);
+                continue;
+            }
+
+            foreach (var other in alive)
+            {
+                // 自己的格子要排除掉尾巴最后那格（它会挪走）
+                var cells = other.Cells;
+                var skipTail = other == s && cells.Count > 1;
+                var limit = cells.Count - (skipTail ? 1 : 0);
+                for (var i = 0; i < limit; i++)
+                {
+                    if (cells[i][0] == head[0] && cells[i][1] == head[1])
+                    {
+                        dead.Add(s);
+                        if (other != s) other.Kills++;
+                        break;
+                    }
+                }
+                if (dead.Contains(s)) break;
+            }
+        }
+
+        // 头对头：两个头撞同一格，一起走
+        var headGroups = newHeads.Where(kv => !dead.Contains(kv.Key))
+            .GroupBy(kv => $"{kv.Value[0]},{kv.Value[1]}")
+            .Where(g => g.Count() > 1);
+        foreach (var g in headGroups)
+            foreach (var kv in g)
+            {
+                var s = kv.Key;
+                dead.Add(s);
+                s.Kills += 1; // 同归于尽也各记一下
+            }
+
+        // 死亡处理：身子变食物，全场都看得到
+        foreach (var s in dead)
+        {
+            s.Alive = false;
+            foreach (var c in s.Cells)
+            {
+                if (snake.Foods.Count < 40 && !snake.Foods.Any(f => f[0] == c[0] && f[1] == c[1]))
+                    snake.Foods.Add(new[] { c[0], c[1] });
+            }
+            s.Cells.Clear();
+        }
+
+        // 幸存者前进
+        foreach (var (s, head) in newHeads)
+        {
+            if (dead.Contains(s)) continue;
+            s.Cells.Insert(0, head);
+
+            var foodIdx = snake.Foods.FindIndex(f => f[0] == head[0] && f[1] == head[1]);
+            if (foodIdx >= 0)
+            {
+                snake.Foods.RemoveAt(foodIdx);
+                s.Score++;
+                s.Eaten++;
+                snake.Pool += SnakeCoins.PerFood;      // 共享金币池又厚了一点
+                SpawnFoodLocked(snake);
+            }
+            else if (s.Cells.Count > SnakeState.StartLen + s.Eaten)
+            {
+                // 没吃到就缩尾（长度 = 起始 + 吃的个数）
+                s.Cells.RemoveAt(s.Cells.Count - 1);
+            }
+        }
+
+        // 场上最多剩一条活的就收场；或者时间到
+        var left = snake.Snakes.Count(s => s.Alive);
+        if (left <= 1 || DateTime.UtcNow >= snake.EndAt)
+        {
+            FinishSnakeLocked(room);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>机器人找吃的：优先安全 + 朝最近食物走</summary>
+    private void BotSteerLocked(SnakeState snake, SnakePlayer bot)
+    {
+        int[] Want(int dx, int dy) => new[] { dx, dy };
+
+        var head = bot.Cells[0];
+        var options = new List<(int[] Dir, int Dist, bool Safe)>();
+        foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+        {
+            if (dx == -bot.Dx && dy == -bot.Dy) continue; // 不掉头
+            var nx = head[0] + dx;
+            var ny = head[1] + dy;
+            var safe = nx >= 0 && nx < SnakeState.W && ny >= 0 && ny < SnakeState.H
+                && !snake.Snakes.Any(s => s.Alive && s.Cells.Any(c => c[0] == nx && c[1] == ny));
+            var dist = snake.Foods.Count == 0 ? 99
+                : snake.Foods.Min(f => Math.Abs(f[0] - nx) + Math.Abs(f[1] - ny));
+            options.Add((Want(dx, dy), dist, safe));
+        }
+
+        var best = options.Where(o => o.Safe).OrderBy(o => o.Dist).FirstOrDefault();
+        if (best.Dir is not null)
+        {
+            bot.Pending.Clear();
+            bot.Pending.Add(best.Dir);
+        }
+        else
+        {
+            // 全都不安全，随便挑一个等死
+            bot.Pending.Clear();
+            bot.Pending.Add(options[Random.Shared.Next(options.Count)].Dir);
+        }
+    }
+
+    private void FinishSnakeLocked(BombRoom room)
+    {
+        var snake = room.Snake!;
+        room.State = RoomState.Finished;
+        try { snake.TickCts.Cancel(); } catch { }
+        snake.LoopRunning = false;
+
+        var winnerId = snake.Snakes
+            .Where(s => s.Alive)
+            .OrderByDescending(s => s.Score)
+            .FirstOrDefault()?.Pid;
+
+        // 共享金币池平分：池子 ÷ 全桌人数，机器人那份不要
+        var humans = room.Players.Count(p => !p.IsBot);
+        var share = humans > 0 ? snake.Pool / humans : 0;
+
+        foreach (var p in room.Players)
+        {
+            var sp = snake.Snakes.FirstOrDefault(s => s.Pid == p.UserId);
+            var pts = sp?.Score ?? 0;
+            if (winnerId is not null && p.UserId == winnerId) pts += SnakeCoins.WinBonus;
+            pts += sp?.Kills * SnakeCoins.KillBonus ?? 0;
+            var coins = p.IsBot ? 0 : share;
+            p.Points = Math.Max(0, p.Points + pts);
+            if (!p.IsBot) p.Coins = Math.Max(0, p.Coins + coins);
+            room.Deltas.Add(new PointDelta(p.UserId, pts, p.IsBot, coins));
+        }
+
+        room.SnakeWinnerId = winnerId;
+        PersistPoints(room.Deltas);
+    }
+
+    /// <summary>玩家转向。</summary>
+    public RoomResult SnakeDir(string code, int userId, int dx, int dy)
+    {
+        lock (_sync)
+        {
+            if (!_rooms.TryGetValue(code, out var room) || room.Snake is null) return RoomResult.Fail("这局已经散啦");
+            if (room.State != RoomState.Playing) return RoomResult.Fail("这局不在进行中");
+            var s = room.Snake.Snakes.FirstOrDefault(x => x.Pid == userId);
+            if (s is null || !s.Alive) return RoomResult.Fail("你的蛇已经下场啦");
+
+            var valid = (dx, dy) is (1, 0) or (-1, 0) or (0, 1) or (0, -1);
+            if (!valid) return RoomResult.Fail("方向不对哦");
+            if (s.Pending.Count < 2) s.Pending.Add(new[] { dx, dy });
+        }
+        return RoomResult.Done(code);
+    }
+
     // ---------------------------------------------------------------- 广播
 
     private void Broadcast(string code)
     {
+        bool isDraw = false;
         object? snapshot = null;
         lock (_sync)
         {
-            if (_rooms.TryGetValue(code, out var room)) snapshot = Snapshot(room);
+            if (_rooms.TryGetValue(code, out var room))
+            {
+                snapshot = Snapshot(room);
+                isDraw = room.GameType == "draw";
+            }
         }
         if (snapshot is not null)
+        {
             _ = _hub.Clients.Group(Key(code)).SendAsync("state", snapshot);
+            // 画猜的词是私货：状态广播完，单独塞给画手本人
+            if (isDraw) SendDrawerSecrets(code);
+        }
     }
 
     private void Notice(string code, string text)
@@ -794,6 +1552,7 @@ public sealed class RoomManager
         return new
         {
             code = room.Code,
+            type = room.GameType,
             state = room.State.ToString().ToLowerInvariant(),
             capacity = room.Capacity,
             hostId = room.HostUserId,
@@ -801,7 +1560,7 @@ public sealed class RoomManager
             max = room.Max,
             low = room.Low,
             high = room.High,
-            turnUserId = room.State == RoomState.Playing && room.Current is not null ? room.Current.UserId : (int?)null,
+            turnUserId = room.State == RoomState.Playing && room.GameType == "bomb" && room.Current is not null ? room.Current.UserId : (int?)null,
             waitLeft,
             round = room.Round,
             players = room.Players.Select(p => new
@@ -826,11 +1585,58 @@ public sealed class RoomManager
                 value = g.Value,
                 dir = g.Dir
             }).ToArray(),
-            bomb = room.State == RoomState.Finished ? room.Bomb : (int?)null,
+            bomb = room.GameType == "bomb" && room.State == RoomState.Finished ? room.Bomb : (int?)null,
             loserId = room.LoserId,
             deltas = room.Deltas.Select(d => new { id = d.UserId, delta = d.Delta, coins = d.Coins, isBot = d.IsBot }).ToArray(),
             canStart = room.State == RoomState.Waiting && room.Players.Count >= 2,
-            botJoined = room.BotAdded
+            botJoined = room.BotAdded,
+            // ---- 你画我猜 ----
+            draw = room.Draw is null ? null : new
+            {
+                phase = room.Draw.Phase,
+                drawerId = room.Draw.DrawerPid,
+                turnNo = room.Draw.TurnNo,
+                turnTotal = room.Players.Count,
+                wordLen = room.Draw.Word.Length,
+                // 只在收场时公开答案，画的过程里谁也别想偷看
+                word = room.State == RoomState.Finished ? room.Draw.Word : "",
+                guessedIds = room.Draw.GuessedIds.ToArray(),
+                strokes = room.Draw.Strokes.Select(st => new
+                {
+                    sid = st.Id,
+                    pid = st.Pid,
+                    color = st.Color,
+                    size = st.Size,
+                    pts = st.Points
+                }).ToArray(),
+                phaseLeft = room.State == RoomState.Playing
+                    ? Math.Max(0, (int)Math.Ceiling((room.Draw.PhaseUntil - DateTime.UtcNow).TotalSeconds))
+                    : 0,
+                scores = room.Draw.Scores.Select(kv => new { id = kv.Key, pts = kv.Value }).ToArray(),
+                winnerId = room.DrawWinnerId
+            },
+            // ---- 贪吃蛇 ----
+            snake = room.Snake is null ? null : new
+            {
+                w = SnakeState.W,
+                h = SnakeState.H,
+                tickMs = SnakeState.TickMs,
+                pool = room.Snake.Pool,
+                endIn = room.State == RoomState.Playing
+                    ? Math.Max(0, (int)Math.Ceiling((room.Snake.EndAt - DateTime.UtcNow).TotalSeconds))
+                    : 0,
+                foods = room.Snake.Foods,
+                snakes = room.Snake.Snakes.Select(s => new
+                {
+                    id = s.Pid,
+                    color = SnakeColors[s.ColorIdx % SnakeColors.Length],
+                    cells = s.Cells,
+                    score = s.Score,
+                    alive = s.Alive,
+                    isBot = s.IsBot
+                }).ToArray(),
+                winnerId = room.SnakeWinnerId
+            }
         };
     }
 }

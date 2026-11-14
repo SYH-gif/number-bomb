@@ -17,6 +17,7 @@
     logRound: -1,
     resultRound: -1,
     capacity: 3,
+    gameType: 'bomb',   // 本次要建的房间玩法
     handlers: [],       // 好友/邮件/对话这些外部事件，连上以后一起挂上去
     bound: new Set(),   // 当前这条连接已经挂过哪些回调，防止重复
     inv: {}             // 我的道具数量
@@ -126,6 +127,7 @@
     }
 
     G.room = s;
+    const type = s.type || 'bomb';
 
     const mePlayer = s.players.find((p) => p.id === S.me?.id);
     if (mePlayer && S.me) {
@@ -145,14 +147,23 @@
     }
 
     stopTick();
-    renderGame(s);
     showView('game');
+
+    // 三个玩法各画各的，先切面板再渲染
+    $('#bombPanel').hidden = type !== 'bomb';
+    $('#drawPanel').hidden = type !== 'draw';
+    $('#snakePanel').hidden = type !== 'snake';
+    if (type === 'draw') window.NBDraw?.render(s);
+    else if (type === 'snake') window.NBSnake?.render(s);
+    else renderGame(s);
 
     if (s.state === 'finished') showResult(s);
     else hideResult();
   }
 
   // ------------------------------------------------------------------ 房间等候
+
+  const GAME_NAMES = { bomb: '数字炸弹 💣', draw: '你画我猜 🎨', snake: '贪吃蛇大乱斗 🐍' };
 
   function renderRoom(s) {
     $('#roomCode').textContent = s.code;
@@ -174,10 +185,11 @@
     const isHost = +s.hostId === S.me?.id;
     const startBtn = $('#btnStart');
     const left = s.capacity - s.players.length;
+    const gameName = GAME_NAMES[s.type || 'bomb'] || GAME_NAMES.bomb;
 
     $('#roomMsg').textContent = left > 0
-      ? `已经 ${s.players.length} 个人了，再等 ${left} 位`
-      : '人齐了，可以开啦';
+      ? `${gameName} · 已经 ${s.players.length} 个人了，再等 ${left} 位`
+      : `${gameName} · 人齐了，可以开啦`;
 
     startBtn.hidden = !isHost;
     startBtn.disabled = s.players.length < 2;
@@ -357,9 +369,49 @@
     G.resultRound = s.round;
 
     const modal = $('#modalResult');
+    const isBomb = (s.type || 'bomb') === 'bomb';
+    const isHost = +s.hostId === S.me?.id;
+
+    if (!isBomb) {
+      // 画猜 / 贪吃蛇：没有"输家"，比的是谁分高
+      const winnerId = s.type === 'draw' ? s.draw?.winnerId : s.snake?.winnerId;
+      const winner = s.players.find((p) => p.id === winnerId);
+      const iWon = winnerId != null && winnerId === S.me?.id;
+      const name = s.type === 'draw' ? '画王' : '蛇王';
+
+      $('#resultEmoji').textContent = winnerId == null ? '🫥' : (iWon ? '🎉' : '🏆');
+      $('#resultTitle').textContent = winnerId == null
+        ? '这局散啦'
+        : (iWon ? `你就是 ${name}！` : `${winner ? winner.name : '有人'} 是 ${name}`);
+      $('#resultSub').textContent = winnerId == null
+        ? '人都走光了，回大厅再开一桌？'
+        : (s.type === 'draw' ? '比的是这一轮谁得分多。再来一轮见真章' : '金币池平分完毕，下一把继续抢吃的');
+
+      $('#resultList').innerHTML = s.players.map((p) => {
+        const d = s.deltas.find((x) => x.id === p.id);
+        const delta = d ? d.delta : 0;
+        const cls = delta > 0 ? 'up' : (delta < 0 ? 'down' : '');
+        const mark = p.id === winnerId ? '<span class="rmark">第一名</span>' : '';
+        return `
+          <div class="result-row ${p.id === winnerId ? 'loser' : ''}">
+            ${avatarMarkup(p, 'avatar avatar-sm')}
+            <span class="rname${roleCls(p)}">${nameHtml(p.name, p.badges)}${p.id === S.me?.id ? ' · 你' : ''}</span>${mark}
+            <span class="rpoints">${p.points} 分</span>
+            <span class="rdelta ${cls}">${delta > 0 ? '+' : ''}${delta || '±0'}${d && d.coins ? ` · ${d.coins > 0 ? '+' : '-'}${Math.abs(d.coins)}🪙` : ''}</span>
+          </div>`;
+      }).join('');
+
+      $('#btnResultAgain').hidden = !isHost || winnerId == null;
+      $('#btnResultAgain').textContent = '再来一把';
+      if (!isHost && winnerId != null) {
+        $('#resultSub').textContent += '。想再来就等房主点一下';
+      }
+      modal.hidden = false;
+      return;
+    }
+
     const loser = s.players.find((p) => p.id === s.loserId);
     const iLost = s.loserId != null && s.loserId === S.me?.id;
-    const isHost = +s.hostId === S.me?.id;
 
     $('#resultEmoji').textContent = s.loserId == null ? '🫥' : (iLost ? '💥' : '🎉');
 
@@ -407,7 +459,7 @@
   // ------------------------------------------------------------------ 大厅交互
 
   function initLobby() {
-    // 建房
+    // 建房：人数
     const countRow = $('#countRow');
     countRow.innerHTML = [2, 3, 4, 5, 6, 7, 8]
       .map((n) => `<button type="button" class="count-btn ${n === G.capacity ? 'is-active' : ''}" data-n="${n}">${n}</button>`)
@@ -419,36 +471,57 @@
       });
     });
 
+    // 建房：玩法
+    const HINTS = {
+      bomb: '最多一万个数，别太狠',
+      draw: '每人画一轮，其他人抢答，猜对就有分',
+      snake: '每人一条蛇，撞到别人肚子他就下线，金币全桌共享'
+    };
+    $$('#gamePickRow .gamepick').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        G.gameType = btn.dataset.g;
+        $$('#gamePickRow .gamepick').forEach((b) => b.classList.toggle('is-active', b === btn));
+        $('#rangeWrap').hidden = G.gameType !== 'bomb';
+        $('#createHint').textContent = HINTS[G.gameType];
+        $('#createHint').classList.remove('warn');
+      });
+    });
+
     $('#btnCreate').addEventListener('click', () => {
       $('#modalCreate').hidden = false;
-      $('#createHint').textContent = '最多一万个数，别太狠';
+      $('#rangeWrap').hidden = G.gameType !== 'bomb';
+      $('#createHint').textContent = HINTS[G.gameType];
       $('#createHint').classList.remove('warn');
     });
 
     $('#btnCreateConfirm').addEventListener('click', async () => {
-      const min = parseInt($('#createMin').value, 10);
-      const max = parseInt($('#createMax').value, 10);
       const hint = $('#createHint');
+      let min = 1, max = 100;
 
-      if (!Number.isFinite(min) || !Number.isFinite(max)) {
-        hint.textContent = '两个格子都要填数字哦';
-        hint.classList.add('warn');
-        return;
-      }
-      if (min === max) {
-        hint.textContent = '两个数得不一样哦';
-        hint.classList.add('warn');
-        return;
-      }
-      if (Math.abs(max - min) > 10000) {
-        hint.textContent = '范围太大啦，收一收（最多一万个数）';
-        hint.classList.add('warn');
-        return;
-      }
-      if (Math.min(min, max) < 0) {
-        hint.textContent = '从 0 开始数比较舒服';
-        hint.classList.add('warn');
-        return;
+      if (G.gameType === 'bomb') {
+        min = parseInt($('#createMin').value, 10);
+        max = parseInt($('#createMax').value, 10);
+
+        if (!Number.isFinite(min) || !Number.isFinite(max)) {
+          hint.textContent = '两个格子都要填数字哦';
+          hint.classList.add('warn');
+          return;
+        }
+        if (min === max) {
+          hint.textContent = '两个数得不一样哦';
+          hint.classList.add('warn');
+          return;
+        }
+        if (Math.abs(max - min) > 10000) {
+          hint.textContent = '范围太大啦，收一收（最多一万个数）';
+          hint.classList.add('warn');
+          return;
+        }
+        if (Math.min(min, max) < 0) {
+          hint.textContent = '从 0 开始数比较舒服';
+          hint.classList.add('warn');
+          return;
+        }
       }
 
       if (!(await whenReady())) {
@@ -457,7 +530,7 @@
         return;
       }
 
-      const r = await G.conn.invoke('CreateRoom', G.capacity, min, max);
+      const r = await G.conn.invoke('CreateGameRoom', G.capacity, min, max, G.gameType);
       if (!r.ok) { hint.textContent = r.error || '没开成，再点一次？'; hint.classList.add('warn'); return; }
       closeModal($('#modalCreate'));
     });
@@ -568,6 +641,8 @@
     G.room = null;
     stopTick();
     hideResult();
+    window.NBDraw?.reset?.();
+    window.NBSnake?.reset?.();
     showView('lobby');
     setTimeout(() => { G.leaving = false; }, 600);
 
@@ -590,7 +665,7 @@
       p.emoji = me.emoji;
     }
     if (G.room.state === 'waiting') renderRoom(G.room);
-    else renderGame(G.room);
+    else if ((G.room.type || 'bomb') === 'bomb') renderGame(G.room);
   }
 
   document.addEventListener('DOMContentLoaded', initLobby);

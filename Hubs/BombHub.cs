@@ -73,12 +73,27 @@ public sealed class BombHub : Hub
         return ok ? new { ok = true, code } : new { ok = false };
     }
 
+    /// <summary>建数字炸弹房（老接口，老页面缓存兼容）</summary>
     public async Task<object> CreateRoom(int capacity, int min, int max)
     {
         var me = Me();
         if (me is null) return new { ok = false, error = "登录状态过期了，刷新一下" };
 
-        var res = _rooms.CreateRoom(me, Context.ConnectionId, capacity, min, max);
+        var res = _rooms.CreateRoom(me, Context.ConnectionId, capacity, min, max, "bomb");
+        if (!res.Ok) return new { ok = false, error = res.Error };
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, RoomManager.Key(res.Code!));
+        _rooms.Nudge(res.Code!);
+        return new { ok = true, code = res.Code };
+    }
+
+    /// <summary>建指定玩法的房间：bomb / draw / snake</summary>
+    public async Task<object> CreateGameRoom(int capacity, int min, int max, string gameType)
+    {
+        var me = Me();
+        if (me is null) return new { ok = false, error = "登录状态过期了，刷新一下" };
+
+        var res = _rooms.CreateRoom(me, Context.ConnectionId, capacity, min, max, gameType);
         if (!res.Ok) return new { ok = false, error = res.Error };
 
         await Groups.AddToGroupAsync(Context.ConnectionId, RoomManager.Key(res.Code!));
@@ -120,6 +135,88 @@ public sealed class BombHub : Hub
         if (!ok) return Task.FromResult<object>(new { ok = false, error = "这间屋已经散了" });
 
         var res = _rooms.Guess(code!, id.Value, value);
+        return Task.FromResult<object>(new { ok = res.Ok, error = res.Error });
+    }
+
+    // ------------------------------------------------------ 你画我猜
+
+    /// <summary>画手从三个候选词里挑一个</summary>
+    public Task<object> ChooseWord(int idx)
+    {
+        var id = UserId;
+        if (id is null) return Task.FromResult<object>(new { ok = false, error = "登录状态过期了" });
+
+        var (ok, code) = _rooms.Resume(id.Value);
+        if (!ok) return Task.FromResult<object>(new { ok = false, error = "这间屋已经散了" });
+
+        var res = _rooms.ChooseWord(code!, id.Value, idx);
+        return Task.FromResult<object>(new { ok = res.Ok, error = res.Error });
+    }
+
+    /// <summary>画手落笔：一笔一传，别人实时看到</summary>
+    public Task<object> DrawStroke(int size, string color, int[] pts)
+    {
+        var id = UserId;
+        if (id is null) return Task.FromResult<object>(new { ok = false, error = "登录状态过期了" });
+
+        var (ok, code) = _rooms.Resume(id.Value);
+        if (!ok) return Task.FromResult<object>(new { ok = false, error = "这间屋已经散了" });
+
+        var res = _rooms.AddStroke(code!, id.Value, size, color, pts);
+        return Task.FromResult<object>(new { ok = res.Ok, error = res.Error });
+    }
+
+    /// <summary>画手撤销上一笔</summary>
+    public Task<object> DrawUndo()
+    {
+        var id = UserId;
+        if (id is null) return Task.FromResult<object>(new { ok = false, error = "登录状态过期了" });
+
+        var (ok, code) = _rooms.Resume(id.Value);
+        if (!ok) return Task.FromResult<object>(new { ok = false, error = "这间屋已经散了" });
+
+        var res = _rooms.UndoStroke(code!, id.Value);
+        return Task.FromResult<object>(new { ok = res.Ok, error = res.Error });
+    }
+
+    /// <summary>画手清空画布</summary>
+    public Task<object> DrawClear()
+    {
+        var id = UserId;
+        if (id is null) return Task.FromResult<object>(new { ok = false, error = "登录状态过期了" });
+
+        var (ok, code) = _rooms.Resume(id.Value);
+        if (!ok) return Task.FromResult<object>(new { ok = false, error = "这间屋已经散了" });
+
+        var res = _rooms.ClearCanvas(code!, id.Value);
+        return Task.FromResult<object>(new { ok = res.Ok, error = res.Error });
+    }
+
+    /// <summary>猜词。猜错全场看得见你写了啥，猜对全场收通知。</summary>
+    public async Task<object> GuessWord(string text)
+    {
+        var id = UserId;
+        if (id is null) return new { ok = false, error = "登录状态过期了" };
+
+        var (ok, code) = _rooms.Resume(id.Value);
+        if (!ok) return new { ok = false, error = "这间屋已经散了" };
+
+        var res = await _rooms.GuessWord(code!, id.Value, text);
+        return new { ok = res.Ok, error = res.Error };
+    }
+
+    // ------------------------------------------------------ 贪吃蛇
+
+    /// <summary>蛇转向（dx/dy 是单位方向）</summary>
+    public Task<object> SnakeDir(int dx, int dy)
+    {
+        var id = UserId;
+        if (id is null) return Task.FromResult<object>(new { ok = false, error = "登录状态过期了" });
+
+        var (ok, code) = _rooms.Resume(id.Value);
+        if (!ok) return Task.FromResult<object>(new { ok = false, error = "这间屋已经散了" });
+
+        var res = _rooms.SnakeDir(code!, id.Value, dx, dy);
         return Task.FromResult<object>(new { ok = res.Ok, error = res.Error });
     }
 
