@@ -2025,3 +2025,83 @@ body.device-phone .app { padding-bottom: calc(72px + env(safe-area-inset-bottom)
   .snake-pool { font-size: 12px; }
   .turn-line { font-size: 13px; }
 }
+
+/* =========================================================
+   1.9.2 手机自适应大升级
+   ========================================================= */
+
+/* 所有可点的东西：禁止双击缩放，点起来干脆 */
+button, .count-btn, .gamepick, .swatch, .sizer, .item-btn, .tab, .mod-btn, .choice-btn {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 手机：输入框字号 ≥16px，iOS 聚焦时页面就不会自己放大了 */
+@media (max-width: 768px) {
+  .input, textarea.input, .chat-compose input, .chat-compose textarea {
+    font-size: 16px;
+  }
+  .input { padding: 12px 14px; }
+}
+
+/* 手机触控目标 ≥44px，手指不用瞄准 */
+@media (max-width: 640px) {
+  .count-btn { min-width: 44px; min-height: 44px; }
+  .gamepick { min-height: 52px; padding: 10px 6px; }
+  .swatch { width: 32px; height: 32px; }
+  .sizer { width: 38px; height: 38px; }
+  .item-btn { min-height: 46px; }
+  .tab { padding: 10px 14px; min-height: 44px; }
+  .modal-x { min-width: 40px; min-height: 40px; }
+  .btn { min-height: 44px; }
+  .btn-sm { min-height: 38px; }
+
+  /* 画布全出血：吃掉面板左右留白，可视面积 +32px */
+  .canvas-wrap {
+    margin-left: -16px;
+    margin-right: -16px;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+
+  /* 顶部胶囊和金币在小屏收紧 */
+  .topbar { gap: 8px; }
+}
+
+/* 游戏区底部给手势条留足位置 */
+@media (max-width: 640px) {
+  .item-bar { padding-bottom: env(safe-area-inset-bottom); }
+  .snake-help { padding: 0 8px calc(6px + env(safe-area-inset-bottom)); }
+  .game-foot { padding-bottom: calc(4px + env(safe-area-inset-bottom)); }
+}
+
+/* 横屏手机：空间金贵，全部收紧 */
+@media (max-height: 500px) and (orientation: landscape) {
+  .topbar { padding: 6px 12px; }
+  .me-name { font-size: 13px; }
+  .player { width: 58px; padding: 6px 3px; }
+  .player .avatar-lg { width: 28px; height: 28px; }
+  .game-players { gap: 6px; }
+  .draw-panel, .snake-panel { gap: 8px; }
+  .snake-help { display: none; }
+  .game-foot { margin-top: 6px; }
+  .modal-card { max-height: calc(100dvh - 16px); }
+  #snakeCanvas, #drawCanvas { aspect-ratio: auto; height: min(46vh, 300px); }
+}
+
+/* 超窄屏（≤360）：再收一档 */
+@media (max-width: 360px) {
+  .player { width: 56px; }
+  .ppoints { font-size: 10px; }
+  .count-btn { min-width: 38px; min-height: 38px; }
+  .range-row { gap: 6px; }
+  .modal-card { padding: 18px 12px 14px; }
+  .draw-word { font-size: 13px; }
+}
+
+/* 平板（641~900）：弹窗和游戏区居中放大，别撑满整宽 */
+@media (min-width: 641px) and (max-width: 900px) {
+  .modal-card { max-width: 460px; }
+  .player { width: 86px; }
+}

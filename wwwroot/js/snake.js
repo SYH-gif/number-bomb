@@ -43,6 +43,12 @@
   function draw(s) {
     const c = canvas();
     const ctx = c.getContext('2d');
+    // 高分屏清晰一点：内部分辨率跟设备走
+    const rect = c.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const bw = Math.round(rect.width * dpr);
+    const bh = Math.round(rect.height * dpr);
+    if (c.width !== bw || c.height !== bh) { c.width = bw; c.height = bh; }
     const d = s.snake || {};
     const W = d.w || 30;
     const H = d.h || 22;
