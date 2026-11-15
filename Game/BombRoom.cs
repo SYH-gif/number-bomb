@@ -36,7 +36,7 @@ public sealed class GuessRecord
     public string Dir { get; init; } = "";
 }
 
-public sealed record PointDelta(int UserId, int Delta, bool IsBot, int Coins = 0);
+public sealed record PointDelta(int UserId, int Delta, bool IsBot, int Coins = 0, int? FinalPoints = null);
 
 /// <summary>一个房间的全部状态。炸弹数字只留在这个对象里，从不发给前端。</summary>
 public sealed class BombRoom

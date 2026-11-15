@@ -420,9 +420,10 @@
       $('#resultSub').textContent = '人都走光了，回大厅再开一桌？';
     } else if (iLost) {
       const mine = s.deltas.find((x) => x.id === S.me?.id);
+      const lostPts = mine ? Math.abs(mine.delta) : 50;
       const lostCoins = mine && mine.coins < 0 ? Math.abs(mine.coins) : 0;
       $('#resultTitle').textContent = '你踩到啦';
-      $('#resultSub').textContent = `炸弹是 ${s.bomb}。掉 5 分${lostCoins ? `、扣 ${lostCoins} 金币` : ''}，下一把还能捞回来`;
+      $('#resultSub').textContent = `炸弹是 ${s.bomb}。掉 ${lostPts} 分${lostCoins ? `、扣 ${lostCoins} 金币` : ''}，下一把还能捞回来`;
     } else {
       $('#resultTitle').textContent = `${loser ? loser.name : '有人'} 踩到啦`;
       $('#resultSub').textContent = `炸弹是 ${s.bomb}，${loser ? loser.name : '他'} 替你挡了一下`;

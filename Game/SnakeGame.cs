@@ -51,6 +51,6 @@ public static class SnakeCoins
     public const int KillBonus = 1;
     /// <summary>活到最后 +5 分</summary>
     public const int WinBonus = 5;
-    /// <summary>死了倒扣 3 分（撞墙、撞肚子、撞自己都算）</summary>
-    public const int DiedPenalty = -3;
+    /// <summary>死了倒扣 50 分（撞墙、撞肚子、撞自己都算）</summary>
+    public const int DiedPenalty = -50;
 }

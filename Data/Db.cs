@@ -308,25 +308,45 @@ public sealed class Db
     }
 
     /// <summary>一局结束后批量结算（积分 + 金币，一个事务里做完）</summary>
-    public void ApplyDeltas(IEnumerable<(int UserId, int Delta, int Coins)> deltas)
+    public void ApplyDeltas(IEnumerable<(int UserId, int Delta, int Coins, int? FinalPoints)> deltas)
     {
         var list = deltas.ToList();
         if (list.Count == 0) return;
 
         using var conn = Open();
         using var tx = conn.BeginTransaction();
-        using var cmd = conn.CreateCommand();
-        cmd.Transaction = tx;
-        cmd.CommandText = "UPDATE users SET points = MAX(0, points + $d), coins = MAX(0, coins + $c) WHERE id = $id";
-        var pd = cmd.CreateParameter(); pd.ParameterName = "$d"; cmd.Parameters.Add(pd);
-        var pc = cmd.CreateParameter(); pc.ParameterName = "$c"; cmd.Parameters.Add(pc);
-        var pi = cmd.CreateParameter(); pi.ParameterName = "$id"; cmd.Parameters.Add(pi);
-        foreach (var (uid, delta, coins) in list)
+
+        // 普通结算：在旧分上加；破产补助：直接写成补助后的分数
+        using var addCmd = conn.CreateCommand();
+        addCmd.Transaction = tx;
+        addCmd.CommandText = "UPDATE users SET points = MAX(0, points + $d), coins = MAX(0, coins + $c) WHERE id = $id";
+        var pd = addCmd.CreateParameter(); pd.ParameterName = "$d"; addCmd.Parameters.Add(pd);
+        var pc = addCmd.CreateParameter(); pc.ParameterName = "$c"; addCmd.Parameters.Add(pc);
+        var pi = addCmd.CreateParameter(); pi.ParameterName = "$id"; addCmd.Parameters.Add(pi);
+
+        using var fixCmd = conn.CreateCommand();
+        fixCmd.Transaction = tx;
+        fixCmd.CommandText = "UPDATE users SET points = $f, coins = MAX(0, coins + $c) WHERE id = $id";
+        var pf = fixCmd.CreateParameter(); pf.ParameterName = "$f"; fixCmd.Parameters.Add(pf);
+        var pc2 = fixCmd.CreateParameter(); pc2.ParameterName = "$c"; fixCmd.Parameters.Add(pc2);
+        var pi2 = fixCmd.CreateParameter(); pi2.ParameterName = "$id"; fixCmd.Parameters.Add(pi2);
+
+        foreach (var (uid, delta, coins, final) in list)
         {
-            pd.Value = delta;
-            pc.Value = coins;
-            pi.Value = uid;
-            cmd.ExecuteNonQuery();
+            if (final is int f)
+            {
+                pf.Value = f;
+                pc2.Value = coins;
+                pi2.Value = uid;
+                fixCmd.ExecuteNonQuery();
+            }
+            else
+            {
+                pd.Value = delta;
+                pc.Value = coins;
+                pi.Value = uid;
+                addCmd.ExecuteNonQuery();
+            }
         }
         tx.Commit();
     }

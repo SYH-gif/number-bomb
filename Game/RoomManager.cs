@@ -378,17 +378,18 @@ public sealed class RoomManager
             : (int?)null;
         room.LoserId = null;
 
+        var broke = new List<string>();
         foreach (var p in room.Players)
         {
             var pts = draw.Scores.TryGetValue(p.UserId, out var s) ? s : 0;
             var coins = draw.CoinsEarned.TryGetValue(p.UserId, out var c) ? c : 0;
-            p.Points = Math.Max(0, p.Points + pts);
-            if (!p.IsBot) p.Coins = Math.Max(0, p.Coins + coins);
-            room.Deltas.Add(new PointDelta(p.UserId, pts, p.IsBot, coins));
+            SettlePoints(room, p, pts, coins, broke);
         }
         room.DrawWinnerId = winner;
         PersistPoints(room.Deltas);
         Broadcast(room.Code);
+        if (broke.Count > 0)
+            Notice(room.Code, $"{string.Join("、", broke)} 分数见底，系统送了 50 分接着玩；还想要找开发者领 🍀");
     }
 
     /// <summary>画猜轮换后：广播状态，并单独把词/候选词塞给画手本人</summary>
@@ -661,19 +662,21 @@ public sealed class RoomManager
             .FirstOrDefault();
 
         room.Deltas.Clear();
+        var broke = new List<string>();
         foreach (var p in room.Players)
         {
             var isLoser = p.UserId == loser.UserId;
-            // 戴了免死金牌就不扣分，牌子这一把用完就没了
-            var delta = isLoser ? (p.Shielded ? 0 : -5) : 5;
+            // 戴了免死金牌就不扣分，牌子这一把用完就没了；踩雷至少扣 50
+            var delta = isLoser ? (p.Shielded ? 0 : -50) : 5;
             if (star is not null && p.UserId == star.UserId && p.GoodGuesses > 0) delta += 5;
 
             // 踩雷的这位扣金币（1~100 随机），赢的人照旧 +30
             var coins = isLoser ? -Shop.RollCoinsLost() : Shop.CoinsForWin;
-            p.Coins = Math.Max(0, p.Coins + coins);
-            p.Points = Math.Max(0, p.Points + delta);
-            room.Deltas.Add(new PointDelta(p.UserId, delta, p.IsBot, coins));
+            SettlePoints(room, p, delta, coins, broke);
         }
+
+        if (broke.Count > 0)
+            Notice(room.Code, $"{string.Join("、", broke)} 分数见底，系统送了 50 分接着玩；还想要找开发者领 🍀");
     }
 
     private void AdvanceTurnLocked(BombRoom room)
@@ -690,11 +693,30 @@ public sealed class RoomManager
         }
     }
 
+    /// <summary>分数见底的破产补助：直接送这么多，别让谁停在 0 分干瞪眼</summary>
+    private const int BrokeTopUp = 50;
+
+    /// <summary>结算分落到人：见底就补 50，并把名单记下来用于广播</summary>
+    private void SettlePoints(BombRoom room, RoomPlayer p, int pts, int coins, List<string> broke)
+    {
+        var now = Math.Max(0, p.Points + pts);
+        int? final = null;
+        if (now <= 0 && !p.IsBot)
+        {
+            now = BrokeTopUp;
+            final = now;
+            broke.Add(p.Name);
+        }
+        p.Points = now;
+        if (!p.IsBot) p.Coins = Math.Max(0, p.Coins + coins);
+        room.Deltas.Add(new PointDelta(p.UserId, pts, p.IsBot, coins) { FinalPoints = final });
+    }
+
     private void PersistPoints(List<PointDelta> deltas)
     {
         try
         {
-            _db.ApplyDeltas(deltas.Where(d => !d.IsBot).Select(d => (d.UserId, d.Delta, d.Coins)));
+            _db.ApplyDeltas(deltas.Where(d => !d.IsBot).Select(d => (d.UserId, d.Delta, d.Coins, d.FinalPoints)));
         }
         catch (Exception ex)
         {
@@ -1490,21 +1512,22 @@ public sealed class RoomManager
         var humans = room.Players.Count(p => !p.IsBot);
         var share = humans > 0 ? snake.Pool / humans : 0;
 
+        var broke = new List<string>();
         foreach (var p in room.Players)
         {
             var sp = snake.Snakes.FirstOrDefault(s => s.Pid == p.UserId);
             var pts = sp?.Score ?? 0;
             if (winnerId is not null && p.UserId == winnerId) pts += SnakeCoins.WinBonus;
             pts += sp?.Kills * SnakeCoins.KillBonus ?? 0;
-            if (sp is { Alive: false }) pts += SnakeCoins.DiedPenalty; // 死了倒扣
+            if (sp is { Alive: false }) pts += SnakeCoins.DiedPenalty; // 死了倒扣 50
             var coins = p.IsBot ? 0 : share;
-            p.Points = Math.Max(0, p.Points + pts);
-            if (!p.IsBot) p.Coins = Math.Max(0, p.Coins + coins);
-            room.Deltas.Add(new PointDelta(p.UserId, pts, p.IsBot, coins));
+            SettlePoints(room, p, pts, coins, broke);
         }
 
         room.SnakeWinnerId = winnerId;
         PersistPoints(room.Deltas);
+        if (broke.Count > 0)
+            Notice(room.Code, $"{string.Join("、", broke)} 分数见底，系统送了 50 分接着玩；还想要找开发者领 🍀");
     }
 
     /// <summary>玩家转向。</summary>

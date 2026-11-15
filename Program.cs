@@ -132,6 +132,9 @@ builder.Services.AddRateLimiter(o =>
 
     o.AddPolicy("admin", ctx => RateLimitPartition.GetFixedWindowLimiter("admin:" + Ip(ctx), _ =>
         new FixedWindowRateLimiterOptions { PermitLimit = 8, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
+    // 后台登录后的常规操作（查列表/删号/调分）：放宽到 60/分，不然清几个号就把额度吃光
+    o.AddPolicy("adminOps", ctx => RateLimitPartition.GetFixedWindowLimiter("adminOps:" + Ip(ctx), _ =>
+        new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 
 var app = builder.Build();
@@ -1115,7 +1118,7 @@ app.MapGet("/admin/api/overview", () =>
         },
         rooms = roomList
     });
-});
+}).RequireRateLimiting("adminOps");
 
 app.MapGet("/admin/api/users", (string? q, int? skip, int? take) =>
 {
@@ -1130,7 +1133,7 @@ app.MapGet("/admin/api/users", (string? q, int? skip, int? take) =>
         take = pageSize,
         users = list
     });
-});
+}).RequireRateLimiting("adminOps");
 
 app.MapPost("/admin/api/users/{id:int}/points", (int id, AdminPointsRequest req) =>
 {
@@ -1142,14 +1145,14 @@ app.MapPost("/admin/api/users/{id:int}/points", (int id, AdminPointsRequest req)
         : db.AddPoints(id, Math.Clamp(req.Delta ?? 0, -100_000, 100_000));
 
     return Results.Json(new { ok = true, id, points });
-});
+}).RequireRateLimiting("adminOps");
 
 app.MapDelete("/admin/api/users/{id:int}", (int id) =>
 {
     rooms.RemoveUser(id);                 // 先把人从牌桌上请下去
     var deleted = db.DeleteUser(id);
     return deleted ? Results.Json(new { ok = true }) : Results.NotFound();
-});
+}).RequireRateLimiting("adminOps");
 
 // ---------------- 实时通道 ----------------
 app.MapHub<BombHub>("/hubs/game");
